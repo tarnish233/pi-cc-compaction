@@ -20,7 +20,7 @@
  * nothing queued, no newer request, at least 200K tokens of context (Claude
  * Code's default; PI_CC_IDLE_COMPACT_MIN_TOKENS changes it, not below 100K),
  * and not more than a minute late. The compaction goes through Pi
- * (ctx.compact), so it is the ordinary pi-cc-compact compaction.
+ * (ctx.compact), so it is the ordinary pi-cc-compaction compaction.
  */
 
 import type { PiCcConfig } from "./config.ts";

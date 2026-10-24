@@ -1,5 +1,5 @@
 /**
- * pi-cc-compact: Claude Code's compaction for Pi.
+ * pi-cc-compaction: Claude Code's compaction for Pi.
  *
  * - patches.ts: Pi's compaction settings answer with Claude Code's numbers
  *   (threshold window - min(output cap, 20K) - 13K, no "Nothing to compact"
@@ -38,13 +38,13 @@ function notify(ctx: ExtensionContext | undefined, message: string, level: "info
 }
 
 export default function piCcCompact(pi: ExtensionAPI): void {
-	registerPiCcCommand(pi, "pi-cc-compact");
+	registerPiCcCommand(pi, "pi-cc-compaction");
 
 	const { missing } = installPatches({ SettingsManager, ExtensionRunner });
 	const rt = runtime();
 	// Pi reads these settings before every threshold check and before it chooses
 	// what a compaction keeps. Claude Code's threshold always; keepRecentTokens 1
-	// (no "Nothing to compact" gate, pi-cc-compact chooses what stays) only when
+	// (no "Nothing to compact" gate, pi-cc-compaction chooses what stays) only when
 	// the fork can read the cache, otherwise Pi compacts with its own settings;
 	// an open breaker turns automatic compaction off.
 	rt.override = (model) => {
@@ -67,7 +67,7 @@ export default function piCcCompact(pi: ExtensionAPI): void {
 		rt.activeSessionId = ctx.sessionManager.getSessionId();
 		if (missing.length > 0 && !toldMissing) {
 			toldMissing = true;
-			notify(ctx, `pi-cc-compact: this Pi has no ${missing.join(" or ")}; compaction and its thresholds fall back to Pi's own`, "warning");
+			notify(ctx, `pi-cc-compaction: this Pi has no ${missing.join(" or ")}; compaction and its thresholds fall back to Pi's own`, "warning");
 		}
 	});
 

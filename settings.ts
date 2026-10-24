@@ -2,7 +2,7 @@
  * The /pi_cc command: the settings every pi-cc package shares.
  *
  * This file is copied verbatim between pi-cc-loop, pi-cc-monitor,
- * pi-cc-plugins and pi-cc-compact (separate npm packages); each repo's tests/shared.test.mjs
+ * pi-cc-plugins and pi-cc-compaction (separate npm packages); each repo's tests/shared.test.mjs
  * fails when the copies drift apart. The settings live in one pi-cc.json and
  * apply to every pi-cc package installed. A change is announced on the
  * "pi-cc:config" channel, so the packages repaint what the settings change

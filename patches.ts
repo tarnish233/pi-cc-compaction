@@ -1,5 +1,5 @@
 /**
- * The two places pi-cc-compact reaches into Pi, and the state they share.
+ * The two places pi-cc-compaction reaches into Pi, and the state they share.
  *
  * 1. SettingsManager.prototype.getCompactionSettings. Pi reads its compaction
  *    settings through this one method, before every threshold check and
@@ -58,7 +58,7 @@ export interface Capture {
 	modelKey?: string;
 }
 
-/** Pi's SettingsManager, as far as pi-cc-compact uses it. */
+/** Pi's SettingsManager, as far as pi-cc-compaction uses it. */
 export interface SettingsLike {
 	getCompactionSettings(model?: unknown): { enabled: boolean; reserveTokens: number; keepRecentTokens: number };
 	getCacheWarmingMode?(): string;
@@ -83,8 +83,8 @@ export interface CompactRuntime {
 	override: CompactionOverride | undefined;
 }
 
-const RUNTIME = Symbol.for("pi-cc-compact:runtime");
-const WRAPPED = Symbol.for("pi-cc-compact:wrapped");
+const RUNTIME = Symbol.for("pi-cc-compaction:runtime");
+const WRAPPED = Symbol.for("pi-cc-compaction:wrapped");
 
 /** The state shared by every load of the extension in this process. */
 export function runtime(): CompactRuntime {
@@ -138,7 +138,7 @@ type Wrappable = ((...args: never[]) => unknown) & { [WRAPPED]?: true };
 
 /**
  * Wrap the two methods, once. Returns the methods this Pi lacks; with either
- * missing, that half of pi-cc-compact stays inert and Pi behaves as without it.
+ * missing, that half of pi-cc-compaction stays inert and Pi behaves as without it.
  */
 export function installPatches(classes: Classes): { missing: string[] } {
 	const missing: string[] = [];

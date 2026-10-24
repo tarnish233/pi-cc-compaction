@@ -1,5 +1,5 @@
 {
-	"name": "pi-cc-compact",
+	"name": "pi-cc-compaction",
 	"version": "0.2.0",
 	"description": "Claude Code's compaction for the Pi coding agent: summaries that reuse the prompt cache, Claude Code's thresholds and prompt, and idle compaction before the cache expires.",
 	"author": "tarnish233",
@@ -13,13 +13,13 @@
 		"context",
 		"prompt-cache"
 	],
-	"homepage": "https://github.com/tarnish233/pi-cc-compact#readme",
+	"homepage": "https://github.com/tarnish233/pi-cc-compaction#readme",
 	"repository": {
 		"type": "git",
-		"url": "git+https://github.com/tarnish233/pi-cc-compact.git"
+		"url": "git+https://github.com/tarnish233/pi-cc-compaction.git"
 	},
 	"bugs": {
-		"url": "https://github.com/tarnish233/pi-cc-compact/issues"
+		"url": "https://github.com/tarnish233/pi-cc-compaction/issues"
 	},
 	"files": [
 		"*.ts",

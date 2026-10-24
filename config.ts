@@ -1,7 +1,7 @@
 /**
  * Shared settings for the pi-cc extensions.
  *
- * pi-cc-loop, pi-cc-monitor, pi-cc-plugins and pi-cc-compact read the same
+ * pi-cc-loop, pi-cc-monitor, pi-cc-plugins and pi-cc-compaction read the same
  * small JSON file so a single toggle changes the whole family at once. The file is optional;
  * when it is missing or malformed the defaults apply. It sits in Pi's agent
  * directory (PI_CODING_AGENT_DIR, default ~/.pi/agent), next to Pi's own
@@ -18,7 +18,7 @@
  *   }
  *
  * compactMessages and footer drive loop and monitor; draft and turnSummary
- * drive pi-cc-plugins; compaction and idleCompaction drive pi-cc-compact. A package that is not installed simply ignores its
+ * drive pi-cc-plugins; compaction and idleCompaction drive pi-cc-compaction. A package that is not installed simply ignores its
  * keys, and they are kept as the user left them.
  *
  * Environment overrides (useful for tests and quick experiments) win over the
@@ -48,9 +48,9 @@ export interface PiCcConfig {
 	draft: boolean;
 	/** pi-cc-plugins: one line closes every agent run. */
 	turnSummary: boolean;
-	/** pi-cc-compact: Claude Code's compaction replaces Pi's summary request. */
+	/** pi-cc-compaction: Claude Code's compaction replaces Pi's summary request. */
 	compaction: boolean;
-	/** pi-cc-compact: compact while idle, before a long prompt cache expires. */
+	/** pi-cc-compaction: compact while idle, before a long prompt cache expires. */
 	idleCompaction: boolean;
 }
 

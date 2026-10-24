@@ -1,5 +1,5 @@
 /**
- * Prompt cache: pi-cc-compact changes only the compaction it is asked for.
+ * Prompt cache: pi-cc-compaction changes only the compaction it is asked for.
  * Caching matches on the prefix (tools, then the system prompt, then the
  * messages), so an ordinary request must reach the provider exactly as Pi
  * and the other extensions built it.
@@ -17,7 +17,7 @@ import os from "node:os";
 import path from "node:path";
 import { test } from "node:test";
 
-const agentDir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-cc-compact-cache-"));
+const agentDir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-cc-compaction-cache-"));
 process.env.PI_CODING_AGENT_DIR = agentDir;
 process.env.PI_CC_CONFIG_FILE = path.join(agentDir, "pi-cc.json");
 

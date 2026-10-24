@@ -1,17 +1,17 @@
-# pi-cc-compact
+# pi-cc-compaction
 
 > 在 Pi 里复刻 Claude Code 的上下文压缩：摘要请求复用提示缓存，阈值和提示词与 Claude Code 一致，空闲时趁缓存未过期先压缩。
 
 ## 安装
 
 ```bash
-pi install npm:pi-cc-compact
+pi install npm:pi-cc-compaction
 ```
 
 安装后执行 `/reload`。本地开发时把仓库软链接到扩展目录即可：
 
 ```bash
-ln -sfn "$PWD" ~/.pi/agent/extensions/pi-cc-compact
+ln -sfn "$PWD" ~/.pi/agent/extensions/pi-cc-compaction
 ```
 
 装上即接管压缩：`/compact`、自动压缩和超限恢复，只要能读到提示缓存就走本包；读不到缓存的情况（见下文）交给 Pi 自己的压缩；空闲时在缓存过期前先压缩。不动 Pi 的缓存保温。不想用时 `/pi_cc compact off` 完全回到 Pi。

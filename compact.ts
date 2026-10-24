@@ -2,7 +2,7 @@
  * The compaction itself: session_before_compact, for /compact, Pi's
  * automatic threshold and overflow recovery alike.
  *
- * pi-cc-compact takes a compaction when it can read the prompt cache
+ * pi-cc-compaction takes a compaction when it can read the prompt cache
  * (plan.ts): the last answered request of this session is forked (fork.ts),
  * so the summary costs a summary, not a re-read of the conversation. When no
  * cache can be read (nothing answered yet, another model, an expired cache,
@@ -178,7 +178,7 @@ export async function handleCompaction(
 		const key = `${sessionId}\u0000${plan.reason}`;
 		if (!told.has(key)) {
 			told.add(key);
-			notify(ctx, `pi-cc-compact: ${plan.reason} \u00b7 Pi's own compaction ran`, "info");
+			notify(ctx, `pi-cc-compaction: ${plan.reason} \u00b7 Pi's own compaction ran`, "info");
 		}
 		return undefined;
 	}
@@ -186,7 +186,7 @@ export async function handleCompaction(
 	// would compact with the keepRecentTokens:1 the settings patch already
 	// answered with, keeping one message - so this is cancelled instead.
 	if (leafIndex === -1 || branch.slice(leafIndex + 1).some((entry) => entry.type === "compaction")) {
-		notify(ctx, "pi-cc-compact: the last answered request is not on this branch \u00b7 the compaction was cancelled", "warning");
+		notify(ctx, "pi-cc-compaction: the last answered request is not on this branch \u00b7 the compaction was cancelled", "warning");
 		return { cancel: true };
 	}
 

@@ -9,7 +9,7 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 
-const agentDir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-cc-compact-index-"));
+const agentDir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-cc-compaction-index-"));
 process.env.PI_CODING_AGENT_DIR = agentDir;
 process.env.PI_CC_CONFIG_FILE = path.join(agentDir, "pi-cc.json");
 delete process.env.PI_CC_COMPACTION;

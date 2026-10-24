@@ -15,7 +15,7 @@ function fakeClasses() {
 			this.sessionManager = { getSessionId: () => sessionId, getLeafId: () => leafId };
 		}
 		async emitBeforeProviderRequest(payload) {
-			// An extension loaded after pi-cc-compact still changes the payload.
+			// An extension loaded after pi-cc-compaction still changes the payload.
 			return { ...payload, user: "added later" };
 		}
 	}

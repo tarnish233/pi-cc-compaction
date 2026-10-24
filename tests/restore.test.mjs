@@ -10,7 +10,7 @@ const restore = await loadModule("restore.ts");
 const call = (name, args) => ({ role: "assistant", content: [{ type: "toolCall", id: `${name}-${JSON.stringify(args)}`, name, arguments: args }] });
 
 function workspace(files) {
-	const dir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-cc-compact-restore-"));
+	const dir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-cc-compaction-restore-"));
 	for (const [name, body] of Object.entries(files)) {
 		fs.mkdirSync(path.dirname(path.join(dir, name)), { recursive: true });
 		fs.writeFileSync(path.join(dir, name), body);

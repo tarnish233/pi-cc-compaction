@@ -28,7 +28,7 @@ export interface BreakerState {
 	open: "failures" | "thrashing" | undefined;
 }
 
-const BREAKERS = Symbol.for("pi-cc-compact:breakers");
+const BREAKERS = Symbol.for("pi-cc-compaction:breakers");
 
 function all(): Map<string, BreakerState> {
 	const holder = globalThis as typeof globalThis & Record<symbol, Map<string, BreakerState> | undefined>;

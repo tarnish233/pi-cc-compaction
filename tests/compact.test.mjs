@@ -246,7 +246,7 @@ test("tool names carry over from the previous summary", async () => {
 });
 
 test("the files read before the summary are read again after it", async () => {
-	const dir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-cc-compact-"));
+	const dir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-cc-compaction-"));
 	fs.writeFileSync(path.join(dir, "bug.ts"), "const bug = 0;\n");
 	const entries = conversation(dir);
 	answered("s1");

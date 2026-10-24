@@ -11,16 +11,16 @@ import test from "node:test";
 import { extensionDir, siblingExtensionDir } from "./helpers.mjs";
 
 const self = path.basename(extensionDir);
-const SIBLINGS = ["pi-cc-loop", "pi-cc-monitor", "pi-cc-plugins", "pi-cc-compact"].filter((name) => name !== self);
+const SIBLINGS = ["pi-cc-loop", "pi-cc-monitor", "pi-cc-plugins", "pi-cc-compaction"].filter((name) => name !== self);
 /** Which packages carry which shared file. */
 const SHARED = {
 	"config.ts": SIBLINGS,
 	"settings.ts": SIBLINGS,
-	"render.ts": SIBLINGS.filter((name) => name !== "pi-cc-plugins" && name !== "pi-cc-compact"),
+	"render.ts": SIBLINGS.filter((name) => name !== "pi-cc-plugins" && name !== "pi-cc-compaction"),
 };
 
 for (const [file, siblings] of Object.entries(SHARED)) {
-	// pi-cc-plugins and pi-cc-compact carry no render.ts: they render nothing
+	// pi-cc-plugins and pi-cc-compaction carry no render.ts: they render nothing
 	// from the shared settings, so the file being absent there is not drift.
 	if (!fs.existsSync(path.join(extensionDir, file))) continue;
 	for (const sibling of siblings) {

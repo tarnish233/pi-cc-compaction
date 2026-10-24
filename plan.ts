@@ -1,5 +1,5 @@
 /**
- * Whether a compaction can read the prompt cache, and so whether pi-cc-compact
+ * Whether a compaction can read the prompt cache, and so whether pi-cc-compaction
  * takes it.
  *
  * The fork (fork.ts) is the last answered request plus one turn. It reads the
