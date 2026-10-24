@@ -129,9 +129,15 @@ export default function piCcCompact(pi: ExtensionAPI): void {
 		forgetSession(ctx.sessionManager.getSessionId());
 	});
 
-	pi.on("session_shutdown", (_event, ctx) => {
+	// A reload ends the extension instances, not the session: the last
+	// answered request is still the one to fork, and a request still in flight
+	// still gets its reply. The extension was never in this session's turns
+	// (loaded mid-session): there is no capture to keep, and that compaction
+	// falls back to Pi's, which says so once.
+	pi.on("session_shutdown", (event, ctx) => {
 		idle.cancel();
 		try {
+			if (event.reason === "reload") return;
 			const sessionId = ctx.sessionManager.getSessionId();
 			forgetSession(sessionId);
 			breaker.reset(sessionId);

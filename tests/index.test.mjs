@@ -118,3 +118,17 @@ test("session shutdown forgets the session's captured request", async () => {
 	await host.emit("session_shutdown", {}, ctx());
 	assert.equal(patches.runtime().captures.has("index-s") || patches.runtime().pending.has("index-s"), false);
 });
+
+test("a reload ends the extension, not the session: the capture and the breaker stay", async () => {
+	patches.runtime().captures.set("index-s", { payload: { messages: [] }, leafId: null, at: 0 });
+	patches.runtime().pending.set("index-s", { payload: { messages: [] }, leafId: null, at: 0 });
+	breaker.noteFailure("index-s");
+	breaker.noteFailure("index-s");
+	breaker.noteFailure("index-s");
+	await host.emit("session_shutdown", { reason: "reload" }, ctx());
+	assert.equal(patches.runtime().captures.has("index-s"), true, "the last answered request is still the one to fork");
+	assert.equal(patches.runtime().pending.has("index-s"), true, "a request still in flight still gets its reply");
+	assert.equal(breaker.isOpen("index-s"), true, "the session's failures still count");
+	patches.forgetSession("index-s");
+	breaker.reset("index-s");
+});
