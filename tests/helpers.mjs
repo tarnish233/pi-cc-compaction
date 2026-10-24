@@ -35,6 +35,8 @@ export function findPiInstall() {
 		// so the extension and the tests share Pi's modules.
 		piCodingAgent: path.join(agent, "index.js"),
 		piTui: path.join(root, "@earendil-works", "pi-tui", "dist", "index.js"),
+		// Pi maps the pi-ai root to its compat entry for extensions.
+		piAi: path.join(root, "@earendil-works", "pi-ai", "dist", "compat.js"),
 		keybindings: path.join(agent, "core", "keybindings.js"),
 	};
 }
@@ -48,6 +50,7 @@ async function makeJiti() {
 		alias: {
 			"@earendil-works/pi-coding-agent": install.piCodingAgent,
 			"@earendil-works/pi-tui": install.piTui,
+			"@earendil-works/pi-ai": install.piAi,
 		},
 	});
 	return jitiInstance;

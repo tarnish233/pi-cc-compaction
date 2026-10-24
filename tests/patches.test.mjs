@@ -47,23 +47,41 @@ test("getCompactionSettings answers with the override, and remembers Pi's settin
 	assert.deepEqual(settings.getCompactionSettings({}), { enabled: true, reserveTokens: 16384, keepRecentTokens: 20000 });
 });
 
-test("the final provider payload is captured per session, after every extension ran", async () => {
+test("the final provider payload is held per session as the request in flight, by reference", async () => {
 	const classes = fakeClasses();
 	patches.installPatches(classes);
 	const rt = patches.runtime();
 	const runner = new classes.ExtensionRunner("s1", "leaf-7");
 	const sent = await runner.emitBeforeProviderRequest({ model: "m", messages: [{ role: "user", content: "hi" }] });
 	assert.equal(sent.user, "added later", "the payload itself is passed through");
-	const capture = rt.captures.get("s1");
-	assert.deepEqual(capture.payload, sent);
-	assert.notEqual(capture.payload, sent, "a copy: later mutation of the request cannot change it");
-	assert.equal(capture.leafId, "leaf-7");
-	assert.ok(Math.abs(capture.at - Date.now()) < 1000);
+	const pending = rt.pending.get("s1");
+	assert.equal(pending.payload, sent, "the very object Pi sends: no copy");
+	assert.equal(pending.leafId, "leaf-7");
+	assert.ok(Math.abs(pending.at - Date.now()) < 1000);
+	assert.equal(rt.captures.has("s1"), false, "not usable before its reply arrives");
 	await new classes.ExtensionRunner("s2", "x").emitBeforeProviderRequest({ model: "m", input: [{ role: "user", content: [] }] });
-	assert.ok(rt.captures.has("s2"), "responses-style input is a conversation too");
+	assert.ok(rt.pending.has("s2"), "responses-style input is a conversation too");
 });
 
-test("cache-warming replays and payloads without a conversation are not captured", async () => {
+test("a successful reply makes the request in flight the one to fork; a failed one leaves the last success", async () => {
+	const classes = fakeClasses();
+	patches.installPatches(classes);
+	const rt = patches.runtime();
+	await new classes.ExtensionRunner("s4", "leaf-1").emitBeforeProviderRequest({ model: "m", messages: [{ role: "user", content: "one" }] });
+	assert.equal(patches.commitPending("s4", { modelKey: "p/m", ttlMs: 3600_000 }), true);
+	assert.equal(rt.captures.get("s4").leafId, "leaf-1");
+	assert.equal(rt.captures.get("s4").ttlMs, 3600_000);
+	assert.equal(rt.captures.get("s4").modelKey, "p/m", "the provider and model the reply came from");
+	assert.equal(rt.pending.has("s4"), false);
+	// The next request overflows: it is in flight, never committed.
+	await new classes.ExtensionRunner("s4", "leaf-2").emitBeforeProviderRequest({ model: "m", messages: [{ role: "user", content: "two" }] });
+	assert.equal(rt.captures.get("s4").leafId, "leaf-1", "the request that succeeded is still the one to fork");
+	assert.equal(patches.commitPending("s5"), false, "nothing in flight, nothing to commit");
+	patches.forgetSession("s4");
+	assert.equal(rt.captures.has("s4") || rt.pending.has("s4"), false);
+});
+
+test("cache-warming replays and payloads without a conversation are not held", async () => {
 	const classes = fakeClasses();
 	patches.installPatches(classes);
 	const rt = patches.runtime();
@@ -73,8 +91,8 @@ test("cache-warming replays and payloads without a conversation are not captured
 		await new classes.ExtensionRunner("s3", "leaf-2").emitBeforeProviderRequest({ model: "m", messages: [{ role: "user", content: "warm" }], ...replay });
 	}
 	await new classes.ExtensionRunner("s3", "leaf-3").emitBeforeProviderRequest({ model: "m" });
-	assert.equal(rt.captures.get("s3").payload.messages[0].content, "real");
-	assert.equal(rt.captures.get("s3").leafId, "leaf-1");
+	assert.equal(rt.pending.get("s3").payload.messages[0].content, "real");
+	assert.equal(rt.pending.get("s3").leafId, "leaf-1");
 	assert.equal(patches.isWarmReplay({ max_tokens: 1 }), true);
 	assert.equal(patches.isWarmReplay({ max_tokens: 2 }), false);
 });

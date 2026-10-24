@@ -138,15 +138,88 @@ test("requestFork sends the fork payload in place of the stub request", async ()
 	assert.deepEqual(result, { ok: true, reply: "<summary>S</summary>", usage: { input: 1, cacheRead: 99 }, stopReason: "stop" });
 });
 
+test("failures are classified with Pi's own rules: retryable, overflow", () => {
+	const err = (errorMessage) => ({ stopReason: "error", errorMessage, content: [] });
+	assert.deepEqual(fork.interpretReply(err("500 Internal server error")), { ok: false, reason: "500 Internal server error", retryable: true, overflow: false });
+	assert.deepEqual(fork.interpretReply(err("prompt is too long: 200001 tokens > 200000 maximum")), {
+		ok: false,
+		reason: "prompt is too long: 200001 tokens > 200000 maximum",
+		retryable: false,
+		overflow: true,
+	});
+	assert.deepEqual(fork.interpretReply(err("invalid x-api-key")), { ok: false, reason: "invalid x-api-key", retryable: false, overflow: false });
+	assert.equal(fork.interpretReply({ stopReason: "length", content: [{ type: "text", text: "cut" }], usage: { input: 9e6, cacheRead: 0 } }).ok, true, "a capped reply is kept, never read as an overflow");
+});
+
+test("lowerOutputCap: only the output cap field moves, never below 4096", () => {
+	assert.deepEqual(fork.lowerOutputCap({ max_tokens: 32000, messages: [] }, 8192), { max_tokens: 23808, messages: [] });
+	assert.deepEqual(fork.lowerOutputCap({ max_completion_tokens: 20000 }, 8192), { max_completion_tokens: 11808 });
+	assert.deepEqual(fork.lowerOutputCap({ max_output_tokens: 10000 }, 8192), { max_output_tokens: 4096 });
+	assert.equal(fork.lowerOutputCap({ max_tokens: 4096 }, 8192), undefined, "nothing left to lower");
+	assert.equal(fork.lowerOutputCap({ messages: [] }, 8192), undefined, "no cap to lower");
+});
+
+function scripted(replies, seen) {
+	return {
+		model: { provider: "p", id: "m", api: "openai-completions", contextWindow: 1000 },
+		sessionManager: { getSessionId: () => "s" },
+		modelRegistry: {
+			async complete(model, context, options) {
+				const sent = await options.onPayload?.({}, model);
+				seen.push(sent);
+				const next = replies.shift();
+				if (next instanceof Error) throw next;
+				return next;
+			},
+		},
+	};
+}
+
+test("forkWithRetry: transient errors are retried with Pi's backoff; the cache prefix never changes", async () => {
+	const seen = [];
+	const delays = [];
+	const ok = { stopReason: "stop", content: [{ type: "text", text: "<summary>S</summary>" }], usage: {} };
+	const replies = [new Error("fetch failed"), { stopReason: "error", errorMessage: "529 overloaded_error", content: [] }, ok];
+	const payload = { model: "m", messages: [{ role: "user", content: "x" }], max_tokens: 30000 };
+	const result = await fork.forkWithRetry(scripted(replies, seen), payload, undefined, { maxRetries: 3, baseDelayMs: 2000, sleep: async (ms) => delays.push(ms) });
+	assert.equal(result.ok, true);
+	assert.equal(result.attempts, 3);
+	assert.deepEqual(delays, [2000, 4000]);
+	assert.ok(seen.every((sent) => sent === payload), "the same request every time");
+});
+
+test("forkWithRetry: an overflow lowers the output cap once; other errors stop at once", async () => {
+	const seen = [];
+	const ok = { stopReason: "stop", content: [{ type: "text", text: "<summary>S</summary>" }], usage: {} };
+	const payload = { model: "m", messages: [{ role: "user", content: "x" }], max_tokens: 30000 };
+	const over = { stopReason: "error", errorMessage: "prompt is too long: 1001 tokens > 1000 maximum", content: [] };
+	const result = await fork.forkWithRetry(scripted([over, ok], seen), payload, undefined, { maxRetries: 3, baseDelayMs: 1, sleep: async () => {} });
+	assert.equal(result.ok, true);
+	assert.equal(seen[1].max_tokens, 30000 - 8192);
+	assert.deepEqual(seen[1].messages, payload.messages, "the prefix is untouched");
+	const twice = await fork.forkWithRetry(scripted([over, over], []), payload, undefined, { maxRetries: 3, baseDelayMs: 1, sleep: async () => {} });
+	assert.equal(twice.ok, false);
+	assert.equal(twice.overflow, true);
+	assert.equal(twice.attempts, 2, "the cap is lowered once only");
+	const fatal = await fork.forkWithRetry(scripted([{ stopReason: "error", errorMessage: "invalid x-api-key", content: [] }], []), payload, undefined, { maxRetries: 3, baseDelayMs: 1, sleep: async () => {} });
+	assert.equal(fatal.attempts, 1);
+	assert.equal(fatal.ok, false);
+});
+
 test("requestFork: a capped reply is still a summary; errors, empty replies and throws are not", async () => {
 	const capped = await fork.requestFork(fakeCtx({ stopReason: "length", content: [{ type: "text", text: "<analysis>cut" }], usage: {} }), { messages: [] }, undefined);
 	assert.equal(capped.ok, true, "Claude Code keeps a reply cut off by the output cap");
 	const error = await fork.requestFork(fakeCtx({ stopReason: "error", errorMessage: "prompt is too long", content: [] }), { messages: [] }, undefined);
-	assert.deepEqual(error, { ok: false, reason: "prompt is too long" });
+	assert.equal(error.ok, false);
+	assert.equal(error.reason, "prompt is too long");
+	assert.equal(error.overflow, true);
 	const empty = await fork.requestFork(fakeCtx({ stopReason: "stop", content: [{ type: "text", text: "  " }] }), { messages: [] }, undefined);
-	assert.deepEqual(empty, { ok: false, reason: "empty reply" });
+	assert.equal(empty.ok, false);
+	assert.equal(empty.reason, "empty reply");
 	const thrown = await fork.requestFork(fakeCtx(new Error("no api key")), { messages: [] }, undefined);
-	assert.deepEqual(thrown, { ok: false, reason: "no api key" });
+	assert.equal(thrown.ok, false);
+	assert.equal(thrown.reason, "no api key");
+	assert.equal(thrown.retryable, false);
 	const ignored = await fork.requestFork(
 		{
 			model: {},
@@ -156,5 +229,6 @@ test("requestFork: a capped reply is still a summary; errors, empty replies and 
 		{ messages: [] },
 		undefined,
 	);
-	assert.deepEqual(ignored, { ok: false, reason: "the provider did not apply the payload rewrite" });
+	assert.equal(ignored.ok, false);
+	assert.equal(ignored.reason, "the provider did not apply the payload rewrite");
 });

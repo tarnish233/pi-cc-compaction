@@ -37,6 +37,9 @@ test("index.ts: no handler that shapes a request, and no API that adds to it", a
 	const snapshot = structuredClone(payload);
 	assert.deepEqual(await host.emit("before_provider_request", { payload }), [undefined]);
 	assert.deepEqual(payload, snapshot);
+	// turn_end could add entries or another model request; the handler returns nothing.
+	const ctx = { sessionManager: { getSessionId: () => "cache-s" }, model: { id: "m" } };
+	assert.deepEqual(await host.emit("turn_end", { message: { role: "assistant", stopReason: "stop" }, toolResults: [] }, ctx), [undefined]);
 });
 
 test("the capture passes the request through untouched", async () => {

@@ -14,7 +14,7 @@ pi install npm:pi-cc-compact
 ln -sfn "$PWD" ~/.pi/agent/extensions/pi-cc-compact
 ```
 
-装上即接管压缩，`/compact`、自动压缩和超限恢复都走本包；不想用时 `/pi_cc compact off` 回到 Pi 自己的压缩。
+装上即接管压缩：`/compact`、自动压缩和超限恢复，只要能读到提示缓存就走本包；读不到缓存的情况（见下文）交给 Pi 自己的压缩。不想用时 `/pi_cc compact off` 完全回到 Pi。
 
 ## 功能
 
@@ -22,6 +22,7 @@ ln -sfn "$PWD" ~/.pi/agent/extensions/pi-cc-compact
 | --- | --- | --- |
 | 复用缓存的摘要 | 摘要请求 = 主对话最后一次请求原样 + 末尾一条摘要指令，读提示缓存而不是重读整段对话 | `fork.ts`、`compact.ts` |
 | Claude Code 的阈值 | 自动压缩在 `窗口 − min(最大输出, 20K) − 13K` 触发（多数模型约 `窗口 − 33K`）；任何有两轮以上的会话都能 `/compact` | `patches.ts` |
+| Claude Code 的失败处理 | 失败就取消并给出 Claude Code 的提示，不换算法；自动压缩有失败熔断和抖动熔断 | `compact.ts`、`breaker.ts` |
 | Claude Code 的提示词 | 九段式摘要（先 `<analysis>` 再 `<summary>`），`/compact <指令>` 作为 Additional Instructions；摘要带 Claude Code 的续接说明 | `prompt.ts` |
 | 压缩后补回文件 | 重读最近读写过的 5 个文件（每个 ≤5K token，合计 ≤50K），太大的只留一句提示 | `restore.ts` |
 | 空闲压缩 | 缓存有效期 ≥1 小时的模型，闲置到有效期的 90% 且上下文 ≥20 万 token 时先压缩 | `idle.ts` |
@@ -34,13 +35,30 @@ Claude Code 则在原会话上分叉：system prompt、工具、消息、思考�
 
 本包照 Claude Code 的做法：
 
-1. **录下请求**：每次普通请求发出前，记下所有扩展处理完之后的最终请求体（包装 `ExtensionRunner.emitBeforeProviderRequest`，所以别的扩展改过的字段，比如 `cache-sticky` 加的 `metadata.user_id`，也在里面）。
-2. **分叉请求**：压缩时把这份请求体原样发出，只在末尾追加摘要指令。思考强度、`max_tokens` 都沿用主请求。缓存热时几乎全部命中（实测免费模型 99.4%）。支持 `anthropic-messages`、`openai-completions`、`openai-responses` 三种 API。
-3. **保留范围**：录下的请求之后新增的消息原样保留，相当于 Claude Code 保留的“最后一轮”；摘要里会注明这些消息摘要没看到。这一轮本身就达到阈值时（小窗口里的超大工具结果），一并总结、不保留。
-4. **兜底**：分叉不可用（还没有请求、换了模型、API 不支持、超限恢复时请求本身就超了）或失败时，退回 Claude Code 的兜底：它的摘要 system prompt，对话以纯文本发出、工具结果截到 2000 字符。两条都失败，交还 Pi 自己的压缩，并提示一次。
+1. **记下请求**：每次普通请求发出前，记下所有扩展处理完之后的最终请求体（包装 `ExtensionRunner.emitBeforeProviderRequest`，所以别的扩展改过的字段，比如 `cache-sticky` 加的 `metadata.user_id`，也在里面）。记的是 Pi 发出的那个对象本身，不复制：Pi 每次请求都新建请求对象，发出后它和 SDK 都不再修改它（已核对 Pi 1.3.0 / 1.4.0 的代码，并在三种 API 上实测）。只有拿到成功回复后，这次请求才成为分叉的起点；出错的请求（比如超限）没有写缓存，起点仍是上一次成功的请求。每个会话只留这一份，会话结束即释放，不写硬盘。
+2. **分叉请求**：压缩时把这份请求体原样发出，只在末尾追加摘要指令。思考强度、`max_tokens` 都沿用主请求。缓存热时几乎全部命中（实测三种 API 都在 95% 以上，剩下的是摘要指令本身）。支持 `anthropic-messages`、`openai-completions`、`openai-responses`。
+3. **保留范围**：分叉起点之后新增的消息原样保留，相当于 Claude Code 保留的“最后一轮”；摘要里会注明这些消息摘要没看到。
+4. **超限恢复**：超限的那次请求没有回复，分叉起点自然是它前一次成功的请求：放得下（Pi 发它时已给输入加输出留了余量），缓存也是热的。超限的那一轮原样保留，压缩后 Pi 自动重发。极少数情况下摘要请求仍报超长，只调低这次请求的输出上限重试一次，缓存前缀不变。
 5. **截断照收**：摘要被输出上限截断时照样采用，和 Claude Code 一样（Pi 自带的压缩会报 “generation hit the token cap”）。
 
-缓存冷了也照样分叉，和 Claude Code 一致；空闲压缩会让这种情况很少出现。
+### 读不到缓存时：交给 Pi
+
+以下情况任何请求都读不到缓存，压缩交给 Pi 自己的压缩，并提示一次原因：
+
+| 情况 | 原因 |
+| --- | --- |
+| 本会话还没有成功的请求 | 刚启动或恢复会话，还没发过请求 |
+| 上次请求用的是别的模型或 provider | 缓存按模型、按 provider 分开 |
+| 缓存已过期 | 模型配了 `promptCache`，且距上次请求已超过有效期；没配的无从判断，照常分叉 |
+| 三种 API 以外的 provider | 无法在请求末尾追加一轮 |
+
+这个判断在 Pi 读取压缩设置时就做出：能分叉才把 `keepRecentTokens` 设为 1；不能分叉就保持 Pi 原值，Pi 按它自己的设置决定保留什么、要不要压缩。
+
+### 失败时：照 Claude Code，不换算法
+
+- 网络中断、5xx、过载等临时错误，按 Pi 的重试设置（`retry.maxRetries`、`retry.baseDelayMs`）退避重试
+- 仍然失败就取消这次压缩，显示 Claude Code 的提示：`Error during compaction: …`；摘要请求超长且无法再降时为 `Compaction failed · conversation could not be reduced below the context limit`；不足两轮时为 `Not enough messages to compact.`
+- 自动压缩连续失败 3 次，本会话不再自动压缩（失败熔断）；连续 3 次在压缩后 3 轮内又回到阈值，判定为抖动，同样停止（`Autocompact is thrashing: …`）。熔断后 `/compact` 仍可用，任何一次压缩成功都会解除熔断
 
 ## 空闲压缩
 
@@ -84,7 +102,7 @@ Pi 的缓存保温（`cacheWarming`）和空闲压缩作用于同一份缓存，
 ## 兼容性
 
 - Pi 1.3.0 / 1.4.0
-- 本包改动 Pi 内部的两个方法（`SettingsManager.getCompactionSettings`、`ExtensionRunner.emitBeforeProviderRequest`），每个进程只包装一次。Pi 升级后找不到它们时，本包会提示，压缩仍然可用（走兜底请求、用 Pi 的阈值）
+- 本包改动 Pi 内部的两个方法（`SettingsManager.getCompactionSettings`、`ExtensionRunner.emitBeforeProviderRequest`），每个进程只包装一次。Pi 升级后找不到它们时，本包会提示；记不下请求就读不到缓存，压缩交给 Pi
 - **只装一个压缩插件**：Pi 依次调用所有扩展的 `session_before_compact`，最后一个返回结果的生效，两个插件都生成摘要会付两份钱、前一份被丢弃
 
 ## 本地开发
@@ -100,15 +118,15 @@ npx --yes typescript@5.9.3 tsc --noEmit -p tsconfig.json
 ### 缓存约束
 
 提示缓存按前缀匹配（工具 → system prompt → 消息）。本包只改它被要求的那次压缩，不改普通请求：
-不注册 `before_agent_start` / `context` / `before_provider_request` 等会改请求的钩子；录请求的包装原样返回同一个请求体对象。
+不注册 `before_agent_start` / `context` 等会改请求的钩子。`before_provider_request` 注册了一个什么都不做的处理器，只是为了让 Pi 把请求交给扩展层（否则记不下请求），它原样放行；记请求的包装也原样返回同一个请求体对象。
 `tests/cache.test.mjs` 守住这一点。
 
 ## 与 Claude Code 的差异
 
 - 提示词：Claude Code 从 8 个实验分支里选摘要提示词（服务端开关），这里固定用默认的 control 分支；工具列表换成 Pi 的小写工具名
 - 补回的内容：Claude Code 还会补回 plan、已加载的技能、后台任务状态，Pi 没有对应的东西；补回的文件作为摘要正文的一部分（Pi 压缩后没有附件位置），措辞相同
-- 超限恢复：Claude Code 按 API 返回的 token 缺口逐步多保留尾部、最后裁掉最早的历史；这里直接走兜底的纯文本请求（工具结果截短）
-- 兜底请求：Claude Code 的兜底发原始消息，这里发纯文本（工具结果截短），超限时也放得下
+- 超限恢复：Claude Code 按 API 返回的 token 缺口逐组多保留尾部，最后裁掉最早的历史；这里从超限前最后一次成功的请求分叉，那次请求必然放得下，不需要逐组退让和裁头
+- 读不到缓存时：Claude Code 照样分叉（或退到它的专用摘要请求）；这里交给 Pi 自己的压缩
 - 不做的：后台预先算摘要、闲置后的服务端工具结果清理、`context_hint`，它们在 Claude Code 里默认关闭（服务端开关）
 
 ## 许可证

@@ -20,6 +20,7 @@ const { fakePi, loadModule } = await import("./helpers.mjs");
 const mod = await loadModule("index.ts");
 const patches = await loadModule("patches.ts");
 const config = await loadModule("config.ts");
+const breaker = await loadModule("breaker.ts");
 
 const readSettings = () => JSON.parse(fs.readFileSync(path.join(agentDir, "settings.json"), "utf8"));
 const tick = () => new Promise((resolve) => setTimeout(resolve, 50));
@@ -48,6 +49,8 @@ test("it listens where compaction, idle time and cache warming are decided, and 
 		"session_compact",
 		"session_shutdown",
 		"session_start",
+		"session_tree",
+		"turn_end",
 	]);
 	assert.ok(host.commands.has("pi_cc"));
 	assert.deepEqual(host.calls, [], "no sendMessage, tools or system prompt");
@@ -61,14 +64,44 @@ test("a pass-through before_provider_request handler, so Pi sends every request 
 	assert.deepEqual(payload, { model: "m", messages: [{ role: "user", content: "hi" }] });
 });
 
-test("Pi's compaction settings answer with Claude Code's numbers while compaction is on", () => {
+test("Pi's compaction settings: Claude Code's threshold; keepRecentTokens 1 only when the fork can read the cache", () => {
 	const rt = patches.runtime();
-	assert.deepEqual(rt.override({ maxTokens: 8000 }), { keepRecentTokens: 1, reserveTokens: 21000 });
+	const model = { provider: "p", id: "m", api: "openai-completions", maxTokens: 8000 };
+	rt.activeSessionId = "index-s";
+	patches.forgetSession("index-s");
+	assert.deepEqual(rt.override(model), { reserveTokens: 21000 }, "nothing answered yet: Pi keeps what Pi keeps");
+	rt.captures.set("index-s", { payload: { model: "m", messages: [] }, leafId: "l", at: Date.now() });
+	assert.deepEqual(rt.override(model), { reserveTokens: 21000, keepRecentTokens: 1 });
+	assert.deepEqual(rt.override({ ...model, id: "other" }), { reserveTokens: 21000 }, "another model: Pi's compaction, Pi's settings");
+	breaker.reset("index-s");
+	breaker.noteFailure("index-s");
+	breaker.noteFailure("index-s");
+	breaker.noteFailure("index-s");
+	assert.deepEqual(rt.override(model), { reserveTokens: 21000, enabled: false, keepRecentTokens: 1 }, "an open breaker turns automatic compaction off");
+	breaker.reset("index-s");
 	process.env.PI_CC_COMPACTION = "0";
 	config.invalidateConfig();
-	assert.equal(rt.override({ maxTokens: 8000 }), undefined, "off: Pi's own numbers");
+	assert.equal(rt.override(model), undefined, "off: Pi's own numbers");
 	delete process.env.PI_CC_COMPACTION;
 	config.invalidateConfig();
+	patches.forgetSession("index-s");
+});
+
+test("a turn that got its reply makes its request the one to fork; a failed turn does not", async () => {
+	const rt = patches.runtime();
+	patches.forgetSession("index-s");
+	const sent = { model: "m", messages: [] };
+	rt.pending.set("index-s", { payload: sent, leafId: "l1", at: Date.now() });
+	assert.deepEqual(await host.emit("turn_end", { message: { role: "assistant", stopReason: "error" }, toolResults: [] }, { ...ctx(), model: { id: "m" } }), [undefined]);
+	assert.equal(rt.captures.has("index-s"), false, "an error reply wrote no cache");
+	assert.deepEqual(await host.emit("turn_end", { message: { role: "assistant", stopReason: "toolUse" }, toolResults: [] }, { ...ctx(), model: { provider: "p", id: "m" } }), [undefined]);
+	assert.equal(rt.captures.get("index-s").payload, sent);
+	assert.equal(rt.captures.get("index-s").modelKey, "p/m");
+	await host.emit("session_tree", {}, ctx());
+	assert.equal(rt.captures.has("index-s"), false, "another branch: that prefix no longer leads here");
+	rt.captures.set("index-s", { payload: sent, leafId: "l1", at: Date.now() });
+	await host.emit("session_compact", { fromExtension: true, reason: "manual" }, ctx());
+	assert.equal(rt.captures.has("index-s"), false, "compacted: the next request starts a new prefix");
 });
 
 test("idle compaction on by default: session start turns cache warming off, /pi_cc idle off brings it back", async () => {
@@ -100,6 +133,7 @@ test("with compaction off, a compaction is left to Pi", async () => {
 
 test("session shutdown forgets the session's captured request", async () => {
 	patches.runtime().captures.set("index-s", { payload: { messages: [] }, leafId: null, at: 0 });
+	patches.runtime().pending.set("index-s", { payload: { messages: [] }, leafId: null, at: 0 });
 	await host.emit("session_shutdown", {}, ctx());
-	assert.equal(patches.runtime().captures.has("index-s"), false);
+	assert.equal(patches.runtime().captures.has("index-s") || patches.runtime().pending.has("index-s"), false);
 });

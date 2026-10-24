@@ -40,9 +40,6 @@ export function summaryRequest(customInstructions?: string): string {
 	return text + reminder(SUMMARY_REPLY_SHAPE);
 }
 
-/** The system prompt of the fallback summary request, which cannot share the session's prefix. */
-export const DEDICATED_SYSTEM_PROMPT = "You are a helpful AI assistant tasked with summarizing conversations.";
-
 const ANALYSIS_BLOCK = /<analysis>[\s\S]*?<\/analysis>/;
 const SUMMARY_BLOCK = /<summary>([\s\S]*?)<\/summary>/;
 

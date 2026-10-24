@@ -15,6 +15,7 @@
  * headers, routing and streaming stay Pi's.
  */
 
+import { isContextOverflow, isRetryableAssistantError } from "@earendil-works/pi-ai";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 
 /** The provider APIs whose request bodies can be extended by one user turn. */
@@ -71,7 +72,7 @@ export function buildForkPayload(api: string, payload: unknown, ask: string): Pa
 
 export type ForkResult =
 	| { ok: true; reply: string; usage: unknown; stopReason: string }
-	| { ok: false; reason: string };
+	| { ok: false; reason: string; retryable?: boolean; overflow?: boolean };
 
 /** A provider reply, as far as a summary needs it. */
 export interface ReplyLike {
@@ -83,11 +84,22 @@ export interface ReplyLike {
 
 /**
  * Read a summary reply. A reply cut off by the output cap is kept, as Claude
- * Code keeps it; an error, an abort or an empty reply is a failure.
+ * Code keeps it; an error, an abort or an empty reply is a failure. An error
+ * is classified with Pi's own rules (pi-ai): retryable (a transient provider
+ * or transport error) and overflow (the request is over the context window).
+ * Only an error can be an overflow here: Pi also reads a capped reply as one,
+ * but a capped summary is kept.
  */
-export function interpretReply(response: ReplyLike): ForkResult {
-	if (response.stopReason === "error" || response.stopReason === "aborted") {
-		return { ok: false, reason: response.errorMessage ?? response.stopReason };
+export function interpretReply(response: ReplyLike, contextWindow?: number): ForkResult {
+	if (response.stopReason === "aborted") return { ok: false, reason: response.errorMessage ?? "aborted" };
+	if (response.stopReason === "error") {
+		const message = { ...response, stopReason: "error", errorMessage: response.errorMessage ?? "" } as never;
+		return {
+			ok: false,
+			reason: response.errorMessage ?? "error",
+			retryable: isRetryableAssistantError(message),
+			overflow: isContextOverflow(message, contextWindow),
+		};
 	}
 	const reply = (response.content ?? [])
 		.filter((block) => block.type === "text" && typeof block.text === "string")
@@ -122,8 +134,89 @@ export async function requestFork(ctx: Pick<ExtensionContext, "model" | "modelRe
 			},
 		} as never)) as typeof response;
 	} catch (error) {
-		return { ok: false, reason: error instanceof Error ? error.message : String(error) };
+		const reason = error instanceof Error ? error.message : String(error);
+		return { ok: false, reason, retryable: isRetryableAssistantError({ stopReason: "error", errorMessage: reason } as never) };
 	}
 	if (!applied) return { ok: false, reason: "the provider did not apply the payload rewrite" };
-	return interpretReply(response);
+	return interpretReply(response, (ctx.model as { contextWindow?: number } | undefined)?.contextWindow);
+}
+
+/** The output cap fields of the three APIs. */
+const CAP_FIELDS = ["max_tokens", "max_completion_tokens", "max_output_tokens"] as const;
+/** Room for the ask, plus Pi's own 4096-token margin. */
+export const OVERFLOW_CAP_CUT = 8192;
+const CAP_FLOOR = 4096;
+
+/**
+ * The payload with its output cap lowered, for a fork that overflowed by the
+ * few tokens of the ask: the request it extends fitted, with Pi's margin.
+ * The cap is not part of the cached prefix. Undefined when there is no cap,
+ * or nothing above the floor to take.
+ */
+export function lowerOutputCap(payload: Payload, by: number): Payload | undefined {
+	for (const field of CAP_FIELDS) {
+		const cap = payload[field];
+		if (typeof cap !== "number") continue;
+		if (cap <= CAP_FLOOR) return undefined;
+		return { ...payload, [field]: Math.max(CAP_FLOOR, cap - by) };
+	}
+	return undefined;
+}
+
+export interface RetryPolicy {
+	/** Retries after the first attempt (Pi's retry.maxRetries). */
+	maxRetries: number;
+	/** The first backoff; each retry doubles it (Pi's retry.baseDelayMs). */
+	baseDelayMs: number;
+	sleep?: (ms: number, signal: AbortSignal | undefined) => Promise<void>;
+}
+
+function sleepFor(ms: number, signal: AbortSignal | undefined): Promise<void> {
+	return new Promise((resolve) => {
+		const timer = setTimeout(resolve, ms);
+		signal?.addEventListener(
+			"abort",
+			() => {
+				clearTimeout(timer);
+				resolve();
+			},
+			{ once: true },
+		);
+	});
+}
+
+/**
+ * Send the fork until it succeeds or fails for good: transient errors are
+ * retried with Pi's backoff, and an overflow lowers the output cap once.
+ * The cached prefix is the same in every attempt.
+ */
+export async function forkWithRetry(
+	ctx: Pick<ExtensionContext, "model" | "modelRegistry" | "sessionManager">,
+	payload: Payload,
+	signal: AbortSignal | undefined,
+	policy: RetryPolicy,
+): Promise<ForkResult & { attempts: number }> {
+	const sleep = policy.sleep ?? sleepFor;
+	let current = payload;
+	let lowered = false;
+	let retries = 0;
+	for (let attempts = 1; ; attempts++) {
+		const result = await requestFork(ctx, current, signal);
+		if (result.ok || signal?.aborted) return { ...result, attempts };
+		if (result.overflow && !lowered) {
+			const next = lowerOutputCap(current, OVERFLOW_CAP_CUT);
+			if (next) {
+				current = next;
+				lowered = true;
+				continue;
+			}
+		}
+		if (result.retryable && retries < policy.maxRetries) {
+			await sleep(policy.baseDelayMs * 2 ** retries, signal);
+			retries++;
+			if (signal?.aborted) return { ...result, attempts };
+			continue;
+		}
+		return { ...result, attempts };
+	}
 }
