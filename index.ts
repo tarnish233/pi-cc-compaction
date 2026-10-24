@@ -58,13 +58,13 @@ export default function piCcCompact(pi: ExtensionAPI): void {
 	};
 
 	const idle = new IdleCompactor();
-	let lastCtx: ExtensionContext | undefined;
 	let toldMissing = false;
 
-
-	pi.on("session_start", async (_event, ctx) => {
-		lastCtx = ctx;
+	pi.on("session_start", async (event, ctx) => {
 		rt.activeSessionId = ctx.sessionManager.getSessionId();
+		// A reload at idle ends no run, so no agent_settled will come to arm
+		// the idle compaction: the continuing session's start re-arms it.
+		if (event.reason === "reload") void idle.arm(ctx, loadConfig());
 		if (missing.length > 0 && !toldMissing) {
 			toldMissing = true;
 			notify(ctx, `pi-cc-compaction: this Pi has no ${missing.join(" or ")}; compaction and its thresholds fall back to Pi's own`, "warning");
@@ -83,7 +83,6 @@ export default function piCcCompact(pi: ExtensionAPI): void {
 	});
 
 	pi.on("agent_settled", async (_event, ctx) => {
-		lastCtx = ctx;
 		await idle.arm(ctx, loadConfig());
 	});
 

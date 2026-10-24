@@ -132,3 +132,25 @@ test("a reload ends the extension, not the session: the capture and the breaker 
 	patches.forgetSession("index-s");
 	breaker.reset("index-s");
 });
+
+test("a reload re-arms the idle compaction: no run will settle to do it", async () => {
+	patches.runtime().captures.set("index-s", { payload: { messages: [] }, leafId: null, at: Date.now() });
+	const idleChecks = [];
+	const idleCtx = {
+		...ctx(),
+		model: { id: "m", promptCache: { short: 7200, long: 7200 } },
+		isIdle: () => (idleChecks.push(1), true),
+		hasPendingMessages: () => false,
+		getContextUsage: () => ({ tokens: 250000 }),
+	};
+	await host.emit("agent_settled", {}, idleCtx);
+	await tick();
+	const armed = idleChecks.length;
+	assert.ok(armed >= 1, "a settled run armed the idle compaction");
+	await host.emit("session_shutdown", { reason: "reload" }, idleCtx);
+	await host.emit("session_start", { reason: "reload" }, idleCtx);
+	await tick();
+	assert.ok(idleChecks.length > armed, "the reload's session_start re-armed it");
+	await host.emit("session_shutdown", {}, ctx());
+	patches.forgetSession("index-s");
+});
