@@ -5,8 +5,9 @@
  * and the other extensions built it.
  *
  * - No handler for an event that shapes a request (before_agent_start,
- *   context, context_with_system, before_provider_request, tool_result,
- *   message_end), and no API that adds to the conversation or the tools.
+ *   context, context_with_system, tool_result, message_end), and no API that
+ *   adds to the conversation or the tools. before_provider_request has a
+ *   handler only so Pi routes requests through the runner; it returns nothing.
  * - The request capture wraps ExtensionRunner.emitBeforeProviderRequest and
  *   hands back the very object the handlers produced.
  */
@@ -22,7 +23,7 @@ process.env.PI_CC_CONFIG_FILE = path.join(agentDir, "pi-cc.json");
 
 const { fakePi, loadModule } = await import("./helpers.mjs");
 
-const SHAPING_EVENTS = ["before_agent_start", "context", "context_with_system", "before_provider_request", "tool_result", "message_end", "input"];
+const SHAPING_EVENTS = ["before_agent_start", "context", "context_with_system", "tool_result", "message_end", "input"];
 
 test("index.ts: no handler that shapes a request, and no API that adds to it", async () => {
 	const mod = await loadModule("index.ts");
@@ -30,6 +31,12 @@ test("index.ts: no handler that shapes a request, and no API that adds to it", a
 	mod.default(host.pi);
 	for (const event of SHAPING_EVENTS) assert.ok(!host.handlers.has(event), `${event} handler`);
 	assert.deepEqual(host.calls, [], "no sendMessage, sendUserMessage, setActiveTools or registerTool");
+	// before_provider_request is listened to only so Pi routes requests through the
+	// runner (where they are captured); the handler passes the payload on untouched.
+	const payload = { model: "m", messages: [{ role: "user", content: "hi" }], tools: [] };
+	const snapshot = structuredClone(payload);
+	assert.deepEqual(await host.emit("before_provider_request", { payload }), [undefined]);
+	assert.deepEqual(payload, snapshot);
 });
 
 test("the capture passes the request through untouched", async () => {

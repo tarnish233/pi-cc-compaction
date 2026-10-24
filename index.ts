@@ -72,6 +72,12 @@ export default function piCcCompact(pi: ExtensionAPI): void {
 		await syncWarming(ctx);
 	});
 
+	// Pi calls ExtensionRunner.emitBeforeProviderRequest, where requests are
+	// captured, only when some extension listens to before_provider_request.
+	// This handler is that listener; it returns nothing, so the payload goes on
+	// exactly as the other handlers left it.
+	pi.on("before_provider_request", () => undefined);
+
 	pi.on("session_before_compact", (event, ctx) => {
 		idle.cancel();
 		return handleCompaction(event, ctx, loadConfig());

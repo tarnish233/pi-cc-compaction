@@ -41,6 +41,7 @@ test("it listens where compaction, idle time and cache warming are decided, and 
 	assert.deepEqual([...host.handlers.keys()].sort(), [
 		"agent_settled",
 		"agent_start",
+		"before_provider_request",
 		"cache_warming_decision",
 		"model_select",
 		"session_before_compact",
@@ -50,6 +51,14 @@ test("it listens where compaction, idle time and cache warming are decided, and 
 	]);
 	assert.ok(host.commands.has("pi_cc"));
 	assert.deepEqual(host.calls, [], "no sendMessage, tools or system prompt");
+});
+
+test("a pass-through before_provider_request handler, so Pi sends every request through the runner", async () => {
+	// Pi skips ExtensionRunner.emitBeforeProviderRequest, and with it the capture,
+	// when no extension listens to before_provider_request.
+	const payload = { model: "m", messages: [{ role: "user", content: "hi" }] };
+	assert.deepEqual(await host.emit("before_provider_request", { payload }), [undefined], "returns nothing: the payload goes on unchanged");
+	assert.deepEqual(payload, { model: "m", messages: [{ role: "user", content: "hi" }] });
 });
 
 test("Pi's compaction settings answer with Claude Code's numbers while compaction is on", () => {
