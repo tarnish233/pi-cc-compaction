@@ -1,0 +1,48 @@
+{
+	"name": "pi-cc-compact",
+	"version": "0.1.0",
+	"description": "Claude Code's compaction for the Pi coding agent: summaries that reuse the prompt cache, Claude Code's thresholds and prompt, and idle compaction before the cache expires.",
+	"author": "tarnish233",
+	"type": "module",
+	"license": "MIT",
+	"keywords": [
+		"pi-package",
+		"extension",
+		"claude-code",
+		"compaction",
+		"context",
+		"prompt-cache"
+	],
+	"homepage": "https://github.com/tarnish233/pi-cc-compact#readme",
+	"repository": {
+		"type": "git",
+		"url": "git+https://github.com/tarnish233/pi-cc-compact.git"
+	},
+	"bugs": {
+		"url": "https://github.com/tarnish233/pi-cc-compact/issues"
+	},
+	"files": [
+		"*.ts",
+		"README.md",
+		"LICENSE"
+	],
+	"pi": {
+		"extensions": [
+			"./index.ts"
+		]
+	},
+	"peerDependencies": {
+		"@earendil-works/pi-coding-agent": "*",
+		"@earendil-works/pi-tui": "*"
+	},
+	"engines": {
+		"node": ">=22.19.0"
+	},
+	"scripts": {
+		"test": "node --test tests/*.test.mjs",
+		"typecheck": "tsc --noEmit -p tsconfig.json"
+	},
+	"publishConfig": {
+		"access": "public"
+	}
+}

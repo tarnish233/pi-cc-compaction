@@ -1,0 +1,123 @@
+import assert from "node:assert";
+import test from "node:test";
+import { loadModule } from "./helpers.mjs";
+
+const idle = await loadModule("idle.ts");
+const patches = await loadModule("patches.ts");
+
+const ON = { compaction: true, idleCompaction: true };
+const HOUR = 3600_000;
+
+test("the cache lifetime comes from the model's promptCache, for the retention Pi uses", () => {
+	const model = { promptCache: { short: 300, long: 3600 } };
+	assert.equal(idle.promptCacheTtlMs(model, {}), 300_000, "short by default");
+	assert.equal(idle.promptCacheTtlMs(model, { PI_CACHE_RETENTION: "long" }), 3600_000);
+	assert.equal(idle.promptCacheTtlMs({ promptCache: { short: 300 } }, { PI_CACHE_RETENTION: "long" }), undefined);
+	assert.equal(idle.promptCacheTtlMs({}, {}), undefined, "no promptCache, no idle compaction");
+});
+
+test("it fires at 90% of the lifetime, as Claude Code and Pi's warmer do", () => {
+	assert.equal(idle.idleDelayMs(HOUR), 3240_000);
+	assert.equal(idle.idleDelayMs(60_000), 50_000, "ten seconds of margin at least");
+	assert.equal(idle.idleMinTokens({}), 200_000);
+	assert.equal(idle.idleMinTokens({ PI_CC_IDLE_COMPACT_MIN_TOKENS: "150000" }), 150_000);
+	assert.equal(idle.idleMinTokens({ PI_CC_IDLE_COMPACT_MIN_TOKENS: "5000" }), 100_000, "not below Claude Code's floor");
+});
+
+function harness({ now = 1_000_000, tokens = 250_000, ttl = { long: 3600 }, idleNow = true, pending = false, env = { PI_CACHE_RETENTION: "long" } } = {}) {
+	const clock = { now };
+	const timers = [];
+	const compacts = [];
+	const notices = [];
+	const ctx = {
+		model: { provider: "p", id: "m", promptCache: ttl },
+		hasUI: true,
+		ui: { notify: (message, level) => notices.push({ message, level }) },
+		isIdle: () => idleNow,
+		hasPendingMessages: () => pending,
+		getContextUsage: () => ({ tokens, contextWindow: 1_000_000 }),
+		sessionManager: { getSessionId: () => "idle-s" },
+		compact: (options) => compacts.push(options),
+	};
+	const compactor = new idle.IdleCompactor({
+		now: () => clock.now,
+		env,
+		setTimer: (fn, ms) => {
+			const timer = { fn, ms, cleared: false };
+			timers.push(timer);
+			return timer;
+		},
+		clearTimer: (timer) => {
+			timer.cleared = true;
+		},
+	});
+	return { clock, timers, compacts, notices, ctx, compactor };
+}
+
+test("armed after a settled run: due at the last request plus 90% of an hour", () => {
+	const h = harness();
+	patches.runtime().captures.set("idle-s", { payload: {}, leafId: "x", at: h.clock.now - 60_000 });
+	h.compactor.arm(h.ctx, ON);
+	assert.equal(h.timers.length, 1);
+	assert.equal(h.timers[0].ms, 3240_000 - 60_000);
+	h.clock.now += h.timers[0].ms;
+	h.timers[0].fn();
+	assert.equal(h.compacts.length, 1, "compacts through Pi, so the fork reads the still-warm cache");
+	h.compacts[0].onComplete({});
+	assert.deepEqual(h.notices.at(-1), { message: "Compacted while idle, before the prompt cache expired \u00b7 turn off with /pi_cc idle off", level: "info" });
+});
+
+test("not armed: settings off, short or unknown cache, small context, busy session, nothing captured", () => {
+	const cases = [
+		["compaction off", {}, { compaction: false, idleCompaction: true }],
+		["idle off", {}, { compaction: true, idleCompaction: false }],
+		["five-minute cache", { ttl: { short: 300, long: 300 } }, ON],
+		["short retention", { env: {} , ttl: { short: 300, long: 3600 } }, ON],
+		["no promptCache", { ttl: null }, ON],
+		["small context", { tokens: 199_999 }, ON],
+		["busy", { idleNow: false }, ON],
+		["queued messages", { pending: true }, ON],
+	];
+	for (const [label, options, config] of cases) {
+		const h = harness(options);
+		patches.runtime().captures.set("idle-s", { payload: {}, leafId: "x", at: h.clock.now });
+		h.compactor.arm(h.ctx, config);
+		assert.equal(h.timers.length, 0, label);
+	}
+	const h = harness();
+	patches.runtime().captures.delete("idle-s");
+	h.compactor.arm(h.ctx, ON);
+	assert.equal(h.timers.length, 0, "no request yet: no cache to keep");
+});
+
+test("when it fires it checks again: a newer request, a busy session or a lapsed timer skip it", () => {
+	for (const [label, change] of [
+		["newer request", (h) => patches.runtime().captures.set("idle-s", { payload: {}, leafId: "y", at: h.clock.now })],
+		["busy", (h) => (h.ctx.isIdle = () => false)],
+		["lapsed", (h) => (h.clock.now += 61_000)],
+		["context shrank", (h) => (h.ctx.getContextUsage = () => ({ tokens: 10, contextWindow: 1 }))],
+	]) {
+		const h = harness();
+		patches.runtime().captures.set("idle-s", { payload: {}, leafId: "x", at: h.clock.now });
+		h.compactor.arm(h.ctx, ON);
+		h.clock.now += h.timers[0].ms;
+		change(h);
+		h.timers[0].fn();
+		assert.equal(h.compacts.length, 0, label);
+	}
+});
+
+test("re-arming or cancelling clears the timer; a failed compaction is reported", () => {
+	const h = harness();
+	patches.runtime().captures.set("idle-s", { payload: {}, leafId: "x", at: h.clock.now });
+	h.compactor.arm(h.ctx, ON);
+	h.compactor.arm(h.ctx, ON);
+	assert.equal(h.timers[0].cleared, true);
+	h.compactor.cancel();
+	assert.equal(h.timers[1].cleared, true);
+	h.compactor.arm(h.ctx, ON);
+	h.clock.now += h.timers[2].ms;
+	h.timers[2].fn();
+	h.compacts[0].onError(new Error("boom"));
+	assert.deepEqual(h.notices.at(-1), { message: "Idle compaction failed: boom", level: "warning" });
+});

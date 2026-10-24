@@ -1,0 +1,43 @@
+name: Publish to npm
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Tag to publish, for example v0.1.0"
+        required: true
+        default: "v0.1.0"
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          registry-url: "https://registry.npmjs.org"
+
+      # Trusted publishing (OIDC) requires npm CLI 11.5.1 or newer.
+      - name: Upgrade npm
+        run: npm install -g npm@latest
+
+      - name: Verify tag and package
+        run: |
+          set -euo pipefail
+          tag="${{ inputs.tag }}"
+          version="$(node -p "require('./package.json').version")"
+          if [ "$tag" != "v$version" ]; then
+            echo "tag $tag does not match package.json version $version" >&2
+            exit 1
+          fi
+          npm pack --dry-run
+
+      - name: Publish
+        run: npm publish --provenance --access public
