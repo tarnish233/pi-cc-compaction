@@ -172,18 +172,22 @@ export async function handleCompaction(
 	const plan = forkPlan(sessionId, ctx.model as { provider?: string; id?: string; api?: string }, (deps.now ?? Date.now)());
 	const branch = event.branchEntries ?? (ctx.sessionManager.getBranch() as EntryLike[]);
 	const leafIndex = plan.ok ? branch.findIndex((entry) => entry.id === plan.capture.leafId) : -1;
-	const handover = !plan.ok
-		? plan.reason
-		: leafIndex === -1 || branch.slice(leafIndex + 1).some((entry) => entry.type === "compaction")
-			? "the last answered request is not on this branch"
-			: undefined;
-	if (handover !== undefined || !plan.ok) {
-		const key = `${sessionId}\u0000${handover}`;
+	// No cache can be read: Pi's own compaction runs, with Pi's own settings,
+	// and the reason is said once.
+	if (!plan.ok) {
+		const key = `${sessionId}\u0000${plan.reason}`;
 		if (!told.has(key)) {
 			told.add(key);
-			notify(ctx, `pi-cc-compact: ${handover} \u00b7 Pi's own compaction ran`, "info");
+			notify(ctx, `pi-cc-compact: ${plan.reason} \u00b7 Pi's own compaction ran`, "info");
 		}
 		return undefined;
+	}
+	// The captured request cannot be matched to this branch (a fork away): Pi
+	// would compact with the keepRecentTokens:1 the settings patch already
+	// answered with, keeping one message - so this is cancelled instead.
+	if (leafIndex === -1 || branch.slice(leafIndex + 1).some((entry) => entry.type === "compaction")) {
+		notify(ctx, "pi-cc-compact: the last answered request is not on this branch \u00b7 the compaction was cancelled", "warning");
+		return { cancel: true };
 	}
 
 	const projected = ctx.sessionManager.buildSessionProjection().entries as unknown as ProjectedEntry[];

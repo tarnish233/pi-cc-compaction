@@ -10,10 +10,10 @@ const HOUR = 3600_000;
 
 test("the cache lifetime comes from the model's promptCache, for the retention Pi uses", () => {
 	const model = { promptCache: { short: 300, long: 3600 } };
-	assert.equal(idle.promptCacheTtlMs(model, {}), 300_000, "short by default");
-	assert.equal(idle.promptCacheTtlMs(model, { PI_CACHE_RETENTION: "long" }), 3600_000);
-	assert.equal(idle.promptCacheTtlMs({ promptCache: { short: 300 } }, { PI_CACHE_RETENTION: "long" }), undefined);
-	assert.equal(idle.promptCacheTtlMs({}, {}), undefined, "no promptCache, no idle compaction");
+	assert.equal(idle.ttlForTier(model, "short"), 300_000);
+	assert.equal(idle.ttlForTier(model, "long"), 3600_000);
+	assert.equal(idle.ttlForTier({ promptCache: { short: 300 } }, "long"), undefined);
+	assert.equal(idle.ttlForTier({}, "short"), undefined, "no promptCache, no idle compaction");
 });
 
 test("it fires at 90% of the lifetime, as Claude Code and Pi's warmer do", () => {
@@ -108,7 +108,7 @@ test("when it fires it checks again: a newer request, a busy session or a lapsed
 	}
 });
 
-test("re-arming or cancelling clears the timer; a failed compaction is reported", async () => {
+test("re-arming or cancelling clears the timer; a failed compaction is reported once", async () => {
 	const h = harness();
 	patches.runtime().captures.set("idle-s", { payload: {}, leafId: "x", at: h.clock.now });
 	await h.compactor.arm(h.ctx, ON);
@@ -119,8 +119,12 @@ test("re-arming or cancelling clears the timer; a failed compaction is reported"
 	await h.compactor.arm(h.ctx, ON);
 	h.clock.now += h.timers[2].ms;
 	h.timers[2].fn();
+	h.compacts[0].onError(new Error("Compaction cancelled"));
+	// ctx.compact is a manual compaction as far as compact.ts knows: it already
+	// showed the failure; the idle pass says nothing more.
+	assert.deepEqual(h.notices, []);
 	h.compacts[0].onError(new Error("boom"));
-	assert.deepEqual(h.notices.at(-1), { message: "Idle compaction failed: boom", level: "warning" });
+	assert.deepEqual(h.notices, [{ message: "Idle compaction failed: boom", level: "warning" }]);
 });
 
 test("a provider's own PI_CACHE_RETENTION (the env of its auth.json entry) picks the long tier, as Pi's requests do", async () => {

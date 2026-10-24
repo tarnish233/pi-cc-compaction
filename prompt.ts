@@ -52,11 +52,6 @@ export function formatSummary(reply: string): string {
 		.trim();
 }
 
-/** Whether the reply holds a closed <summary> block (an uncapped, complete reply). */
-export function hasSummaryBlock(reply: string): boolean {
-	return SUMMARY_BLOCK.test(reply.replace(ANALYSIS_BLOCK, ""));
-}
-
 export const CONTINUATION_OPENER =
 	"This session is being continued from a previous conversation that ran out of context. The summary below covers the earlier portion of the conversation.";
 

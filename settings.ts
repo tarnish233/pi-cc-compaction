@@ -119,7 +119,7 @@ const PAGES: SettingsPage[] = [
 				on: "on",
 				off: "off",
 				description:
-					"Compact while idle, before a prompt cache of an hour or more expires (models with promptCache). Turns Pi's cache warming off while on.",
+					"Compact while idle, before a prompt cache of an hour or more expires (models with promptCache).",
 			},
 		],
 	},

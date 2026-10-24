@@ -41,15 +41,6 @@ test("custom /compact instructions go in as Additional Instructions, before the 
 	assert.equal(prompt.summaryRequest("   "), prompt.summaryRequest(), "blank instructions are ignored");
 });
 
-test("formatSummary drops the analysis and labels the summary, as Claude Code does", () => {
-	const reply = "<analysis>\nthinking it over\n</analysis>\n\n<summary>\n1. Primary Request:\n   do it\n\n\n\n2. More\n</summary>\n";
-	assert.equal(prompt.formatSummary(reply), "Summary:\n1. Primary Request:\n   do it\n\n2. More");
-	assert.equal(prompt.hasSummaryBlock(reply), true);
-	// A reply cut off by the output cap is still used; it just keeps its text.
-	const cut = "<analysis>\nstill going";
-	assert.equal(prompt.formatSummary(cut), "<analysis>\nstill going");
-	assert.equal(prompt.hasSummaryBlock(cut), false);
-});
 
 test("the summary message carries Claude Code's continuation text", () => {
 	const text = prompt.summaryMessage({

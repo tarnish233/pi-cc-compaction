@@ -14,7 +14,7 @@ pi install npm:pi-cc-compact
 ln -sfn "$PWD" ~/.pi/agent/extensions/pi-cc-compact
 ```
 
-装上即接管压缩：`/compact`、自动压缩和超限恢复，只要能读到提示缓存就走本包；读不到缓存的情况（见下文）交给 Pi 自己的压缩。不想用时 `/pi_cc compact off` 完全回到 Pi。
+装上即接管压缩：`/compact`、自动压缩和超限恢复，只要能读到提示缓存就走本包；读不到缓存的情况（见下文）交给 Pi 自己的压缩；空闲时在缓存过期前先压缩。不动 Pi 的缓存保温。不想用时 `/pi_cc compact off` 完全回到 Pi。
 
 ## 功能
 
@@ -26,7 +26,6 @@ ln -sfn "$PWD" ~/.pi/agent/extensions/pi-cc-compact
 | Claude Code 的提示词 | 九段式摘要（先 `<analysis>` 再 `<summary>`），`/compact <指令>` 作为 Additional Instructions；摘要带 Claude Code 的续接说明 | `prompt.ts` |
 | 压缩后补回文件 | 重读最近读写过的 5 个文件（每个 ≤5K token，合计 ≤50K），太大的只留一句提示 | `restore.ts` |
 | 空闲压缩 | 缓存有效期 ≥1 小时的模型，闲置到有效期的 90% 且上下文 ≥20 万 token 时先压缩 | `idle.ts` |
-| 关闭缓存保温 | 空闲压缩开着时把 Pi 的 `cacheWarming` 设为 `off`，关掉空闲压缩时恢复原值 | `warming.ts` |
 
 ## 压缩怎么做
 
@@ -81,22 +80,17 @@ Claude Code 则在原会话上分叉：system prompt、工具、消息、思考�
 { "cloudagent": { "type": "api_key", "key": "…", "env": { "PI_CACHE_RETENTION": "long" } } }
 ```
 
-### 缓存保温
+### 与 Pi 缓存保温的关系
 
-Pi 的缓存保温（`cacheWarming`）和空闲压缩作用于同一份缓存，有了空闲压缩也不再需要保温。所以：
-
-- 空闲压缩开着时，本包把 `settings.json` 里的 `cacheWarming` 设为 `off`，原值记在 `pi-cc.json` 的 `idleCompactionSavedCacheWarming`（原来没写这个键就记为 `null`）
-- `/pi_cc idle off`（或 `/pi_cc compact off`）时恢复原值；原来没写就删掉这个键，回到 Pi 的默认值。期间你手动改过 `cacheWarming` 的话，以你的为准，只删掉记录
-- 改动通过 Pi 自己的 `SettingsManager` 写入（加文件锁、只合并这一个键），不影响其他设置；运行中的 Pi 同步生效
-- **卸载前先执行 `/pi_cc idle off`**：直接卸载没有机会恢复保温设置
+两者不冲突，各管各的时间段，本包不改 `cacheWarming`：Pi 的保温只在缓存较短时起作用（它自身的安全窗口：空闲最多 30 分钟、运行中最多 60 分钟，超过约半小时的缓存实际上不保温），空闲压缩只管 1 小时以上的缓存。5 分钟档的模型（如未设 `PI_CACHE_RETENTION=long` 的 Anthropic）只有保温能救，两样都留着。
 
 ## /pi_cc
 
 本包和 pi-cc-loop、pi-cc-monitor、pi-cc-plugins 共同提供 `/pi_cc`：pi-cc 家族的设置命令，装了几个包都只有一个。
 
 - 本包的两项在面板的 Compact 页（Tab / Shift+Tab 切换页）：**CC compaction**（`compaction`，默认开）和 **Idle compaction**（`idleCompaction`，默认开）；`/pi_cc compact on|off`、`/pi_cc idle on|off` 切换
-- 切换即时生效，不用 `/reload`：阈值从下一次检查起变化，压缩从下一次起换回 Pi 的或本包的，保温当场关闭或恢复
-- 空闲压缩依赖 CC compaction：后者关掉时前者也不生效，保温随之恢复
+- 切换即时生效，不用 `/reload`：阈值从下一次检查起变化，压缩从下一次起换回 Pi 的或本包的
+- 空闲压缩依赖 CC compaction：后者关掉时前者也不生效
 - 环境变量 `PI_CC_COMPACTION=0`、`PI_CC_IDLE_COMPACTION=0` 可临时覆盖，面板里相应项锁定
 
 ## 兼容性
@@ -122,6 +116,8 @@ npx --yes typescript@5.9.3 tsc --noEmit -p tsconfig.json
 `tests/cache.test.mjs` 守住这一点。
 
 ## 与 Claude Code 的差异
+
+- 熔断打开后，本会话的自动压缩和 Pi 的超限恢复一起停（返回 `enabled:false`）。Claude Code 的失败熔断只拦主动压缩，超限时仍尝试恢复；这里没有等效的手段只拦其一
 
 - 提示词：Claude Code 从 8 个实验分支里选摘要提示词（服务端开关），这里固定用默认的 control 分支；工具列表换成 Pi 的小写工具名
 - 补回的内容：Claude Code 还会补回 plan、已加载的技能、后台任务状态，Pi 没有对应的东西；补回的文件作为摘要正文的一部分（Pi 压缩后没有附件位置），措辞相同

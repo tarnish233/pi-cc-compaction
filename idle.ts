@@ -47,11 +47,6 @@ export function ttlForTier(model: PromptCacheModel, tier: Tier): number | undefi
 	return typeof seconds === "number" && seconds > 0 ? seconds * 1000 : undefined;
 }
 
-/** The prompt cache lifetime for the retention an environment selects, in ms. */
-export function promptCacheTtlMs(model: PromptCacheModel, env: Env = process.env): number | undefined {
-	return ttlForTier(model, env.PI_CACHE_RETENTION === "long" ? "long" : "short");
-}
-
 /** What idle compaction asks of the model registry: the provider's own environment. */
 interface RegistryLike {
 	getApiKeyAndHeaders?(model: never): Promise<{ ok: boolean; env?: Record<string, string> }>;
@@ -102,6 +97,13 @@ export interface IdleDeps {
 	env?: Env;
 	setTimer?: (fn: () => void, ms: number) => unknown;
 	clearTimer?: (timer: unknown) => void;
+}
+
+
+/** A failure compact.ts has already shown, as it shows a failed manual /compact ("Compaction failed: …", "Compaction cancelled"). */
+function isReportedCompactionError(error: Error): boolean {
+	const message = error.message ?? "";
+	return /^Compaction (failed|cancelled|aborted)/i.test(message) || /^Compaction$/i.test(message);
 }
 
 export class IdleCompactor {
@@ -170,9 +172,15 @@ export class IdleCompactor {
 			const capture = runtime().captures.get(ctx.sessionManager.getSessionId());
 			if (!capture || capture.at !== plan.requestAt) return;
 			if (!config.compaction || !config.idleCompaction || !this.ready(ctx)) return;
+			// compact.ts already reports a failed compaction as a manual /compact
+			// would (it cannot tell an idle pass from a typed one), so a failure it
+			// shows is not repeated here; anything else is.
 			ctx.compact({
 				onComplete: () => this.notify(ctx, IDLE_NOTICE, "info"),
-				onError: (error) => this.notify(ctx, `Idle compaction failed: ${error.message}`, "warning"),
+				onError: (error) => {
+					if (isReportedCompactionError(error)) return;
+					this.notify(ctx, `Idle compaction failed: ${error.message}`, "warning");
+				},
 			});
 		} catch {
 			// a stale context (the session ended) must not throw from a timer

@@ -127,6 +127,17 @@ test("no cache to read: Pi's own compaction runs, and the user is told why, once
 	}
 });
 
+test("an answered request that is not on this branch cancels instead of handing Pi a keepRecentTokens:1 it never chose", async () => {
+	const entries = conversation();
+	// The capture points at an entry that is not on the branch (a fork away).
+	answered("s1", "gone-from-branch");
+	const { ctx, seen } = fakeCtx({ entries });
+	compact.resetNotices();
+	assert.deepEqual(await compact.handleCompaction(event(entries), ctx, ON, NO_WAIT), { cancel: true });
+	assert.equal(seen.sent.length, 0, "nothing is sent");
+	assert.match(seen.notices[0].message, /not on this branch/);
+});
+
 test("overflow recovery forks the request that succeeded before the one that overflowed", async () => {
 	const entries = [...conversation(), user("u2", "now read the huge log")];
 	answered("s1");

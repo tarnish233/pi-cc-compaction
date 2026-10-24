@@ -22,7 +22,6 @@ const patches = await loadModule("patches.ts");
 const config = await loadModule("config.ts");
 const breaker = await loadModule("breaker.ts");
 
-const readSettings = () => JSON.parse(fs.readFileSync(path.join(agentDir, "settings.json"), "utf8"));
 const tick = () => new Promise((resolve) => setTimeout(resolve, 50));
 
 function ctx(notices = []) {
@@ -38,12 +37,11 @@ function ctx(notices = []) {
 const host = fakePi();
 mod.default(host.pi);
 
-test("it listens where compaction, idle time and cache warming are decided, and owns /pi_cc", () => {
+test("it listens where compaction and idle time are decided, and owns /pi_cc", () => {
 	assert.deepEqual([...host.handlers.keys()].sort(), [
 		"agent_settled",
 		"agent_start",
 		"before_provider_request",
-		"cache_warming_decision",
 		"model_select",
 		"session_before_compact",
 		"session_compact",
@@ -104,23 +102,6 @@ test("a turn that got its reply makes its request the one to fork; a failed turn
 	assert.equal(rt.captures.has("index-s"), false, "compacted: the next request starts a new prefix");
 });
 
-test("idle compaction on by default: session start turns cache warming off, /pi_cc idle off brings it back", async () => {
-	const notices = [];
-	await host.emit("session_start", { reason: "startup" }, ctx(notices));
-	assert.equal(readSettings().cacheWarming, "off");
-	assert.equal(readSettings().theme, "dark");
-	assert.match(notices.at(-1).message, /cache warming off/);
-	assert.deepEqual(await host.emit("cache_warming_decision", { action: "warm" }), [{ action: "stop" }]);
-
-	await host.commands.get("pi_cc").handler("idle off", ctx(notices));
-	await tick();
-	assert.equal(readSettings().cacheWarming, "streaming", "exactly what it was");
-	assert.deepEqual(await host.emit("cache_warming_decision", { action: "warm" }), [undefined]);
-
-	await host.commands.get("pi_cc").handler("idle on", ctx(notices));
-	await tick();
-	assert.equal(readSettings().cacheWarming, "off");
-});
 
 test("with compaction off, a compaction is left to Pi", async () => {
 	process.env.PI_CC_COMPACTION = "0";

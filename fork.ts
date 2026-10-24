@@ -8,9 +8,9 @@
  * cache marker stays where the last ordinary request put it, so the fork reads
  * the cache and writes nothing new (Claude Code's skipCacheWrite).
  *
- * Here the fork is built from the last ordinary request exactly as the
- * provider received it (see capture.ts) and sent through Pi's own provider
- * code: modelRegistry.complete() builds a request for a stub context, and the
+ * Here the fork is built from the last answered request exactly as the
+ * provider received it (patches.ts) and sent through Pi's own provider code:
+ * modelRegistry.complete() builds a request for a stub context, and the
  * onPayload hook swaps in the fork before it goes out. Authentication,
  * headers, routing and streaming stay Pi's.
  */
