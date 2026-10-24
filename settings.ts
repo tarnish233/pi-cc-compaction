@@ -10,12 +10,15 @@
  *
  * Pi's /settings cannot take items from an extension (its panel is a fixed
  * list, and the command is handled before extension commands), so /pi_cc
- * opens the same kind of screen, built from the same parts: SettingsList
- * between two borders, the selected setting's description below it, and
- * Enter/Space to change a value. A change is saved at once and Esc closes.
- * A setting that an environment variable overrides shows the value in effect
- * and cannot be changed here; its description names the variable. Outside the
- * TUI, /pi_cc prints the summary.
+ * opens its own, laid out like pi-cc-extensions' /ccstyle: one page per
+ * plugin, a tab bar on top (Tab and Shift+Tab switch pages), and on each page
+ * Pi's SettingsList with the selected setting's description below it.
+ * Enter/Space changes a value; a change is saved at once and Esc closes.
+ * Message style and the footer summary serve pi-cc-loop and pi-cc-monitor
+ * alike, so the two share a page. A setting that an environment variable
+ * overrides shows the value in effect and cannot be changed here; its
+ * description names the variable. Outside the TUI, /pi_cc prints the summary,
+ * page by page.
  *
  * Only one /pi_cc exists however many pi-cc packages are installed: Pi turns
  * same-named commands from different extensions into /pi_cc:1 and /pi_cc:2,
@@ -27,8 +30,8 @@
  * getCommands() cannot be called during loading.
  */
 
-import { DynamicBorder, type ExtensionAPI, type ExtensionCommandContext, type ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { Container, SettingsList, Spacer, Text, type SettingItem, type SettingsListTheme } from "@earendil-works/pi-tui";
+import type { ExtensionAPI, ExtensionCommandContext, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { matchesKey, SettingsList, truncateToWidth, visibleWidth, type SettingItem, type SettingsListTheme } from "@earendil-works/pi-tui";
 import os from "node:os";
 import path from "node:path";
 import { configPath, envOverride, loadConfig, saveConfig, type PiCcConfig } from "./config.ts";
@@ -54,58 +57,83 @@ interface SettingSpec {
 	description: string;
 }
 
-const SETTINGS: SettingSpec[] = [
+interface SettingsPage {
+	label: string;
+	settings: SettingSpec[];
+}
+
+const PAGES: SettingsPage[] = [
 	{
-		field: "compactMessages",
-		label: "Message style",
-		on: "compact",
-		off: "card",
-		description:
-			"How scheduled fires and Monitor events are drawn. compact: \u273b header and indented body; card: the old padded card.",
+		label: "Loop & Monitor",
+		settings: [
+			{
+				field: "compactMessages",
+				label: "Message style",
+				on: "compact",
+				off: "card",
+				description:
+					"How scheduled fires and Monitor events are drawn. compact: \u273b header and indented body; card: the old padded card.",
+			},
+			{
+				field: "footer",
+				label: "Footer summary",
+				on: "on",
+				off: "off",
+				description: "One line in Pi's footer while loops or monitors run: loop 2 \u00b7 next 3m, monitor 2.",
+			},
+		],
 	},
 	{
-		field: "footer",
-		label: "Footer summary",
-		on: "on",
-		off: "off",
-		description: "One line in Pi's footer while loops or monitors run: loop 2 \u00b7 next 3m, monitor 2.",
+		label: "Plugins",
+		settings: [
+			{
+				field: "draft",
+				label: "Draft recall",
+				on: "on",
+				off: "off",
+				description: "Ctrl+C keeps what it clears; Up on the empty editor brings it back.",
+			},
+			{
+				field: "turnSummary",
+				label: "Turn summary",
+				on: "on",
+				off: "off",
+				description: "One line closes every agent run \u2014 tools, duration, done time.",
+			},
+		],
 	},
 	{
-		field: "draft",
-		label: "Draft recall",
-		on: "on",
-		off: "off",
-		description: "pi-cc-plugins: Ctrl+C keeps what it clears; Up on the empty editor brings it back.",
-	},
-	{
-		field: "turnSummary",
-		label: "Turn summary",
-		on: "on",
-		off: "off",
-		description: "pi-cc-plugins: one line closes every agent run \u2014 tools, duration, done time.",
-	},
-	{
-		field: "compaction",
-		label: "CC compaction",
-		on: "on",
-		off: "off",
-		description:
-			"pi-cc-compact: compaction summarizes the way Claude Code does \u2014 the same prompt and thresholds, reusing the prompt cache. off: Pi's own compaction.",
-	},
-	{
-		field: "idleCompaction",
-		label: "Idle compaction",
-		on: "on",
-		off: "off",
-		description:
-			"pi-cc-compact: compact while idle, before a prompt cache of an hour or more expires (models with promptCache). Turns Pi's cache warming off while on.",
+		label: "Compact",
+		settings: [
+			{
+				field: "compaction",
+				label: "CC compaction",
+				on: "on",
+				off: "off",
+				description:
+					"Compaction summarizes the way Claude Code does \u2014 the same prompt and thresholds, reusing the prompt cache. off: Pi's own compaction.",
+			},
+			{
+				field: "idleCompaction",
+				label: "Idle compaction",
+				on: "on",
+				off: "off",
+				description:
+					"Compact while idle, before a prompt cache of an hour or more expires (models with promptCache). Turns Pi's cache warming off while on.",
+			},
+		],
 	},
 ];
+
+const SETTINGS: SettingSpec[] = PAGES.flatMap((page) => page.settings);
+
+/** Labels padded to one width, so the values stay in one column from page to page. */
+const LABEL_WIDTH = Math.max(...SETTINGS.map((spec) => spec.label.length));
 
 /**
  * Pi's getSettingsListTheme(), built from the theme the panel is given: the
  * global theme that function reads is not shared with extensions in every
- * Pi runtime (see the note on Pi's DynamicBorder).
+ * Pi runtime.
  */
 function listTheme(theme: PanelTheme): SettingsListTheme {
 	return {
@@ -126,16 +154,17 @@ function displayPath(file: string): string {
 function item(spec: SettingSpec): SettingItem {
 	const value = loadConfig()[spec.field] ? spec.on : spec.off;
 	const override = envOverride(spec.field);
+	const label = spec.label.padEnd(LABEL_WIDTH);
 	if (override) {
 		// No values: Enter/Space leaves it alone, and the description says why.
 		return {
 			id: spec.field,
-			label: spec.label,
+			label,
 			currentValue: value,
 			description: `${spec.description}\n${override} overrides this while set; unset it to change it here.`,
 		};
 	}
-	return { id: spec.field, label: spec.label, currentValue: value, values: [spec.on, spec.off], description: spec.description };
+	return { id: spec.field, label, currentValue: value, values: [spec.on, spec.off], description: spec.description };
 }
 
 export interface SettingsPanelOptions {
@@ -153,36 +182,69 @@ export interface SettingsPanel {
 	handleInput(data: string): void;
 }
 
+const HINT = "  Enter/Space to change \u00b7 Tab/Shift+Tab to switch pages \u00b7 Esc to close";
+
+function isNextPageKey(data: string): boolean {
+	return data === "\t" || matchesKey(data, "tab");
+}
+
+function isPreviousPageKey(data: string): boolean {
+	// CSI Z is how most terminals send Shift+Tab.
+	return data === "\x1b[Z" || matchesKey(data, "shift+tab");
+}
+
 export function settingsPanel(options: SettingsPanelOptions): SettingsPanel {
 	const { theme } = options;
-	const list = new SettingsList(
-		SETTINGS.map(item),
-		SETTINGS.length,
-		listTheme(theme),
-		(id, value) => {
-			const spec = SETTINGS.find((candidate) => candidate.field === id);
-			if (!spec) return;
-			options.onChange(spec.field, value === spec.on);
-			// Show what is in effect now.
-			list.updateValue(id, loadConfig()[spec.field] ? spec.on : spec.off);
-		},
-		() => options.onClose(),
-	);
+	const lists = PAGES.map((page) => {
+		const list: SettingsList = new SettingsList(
+			page.settings.map(item),
+			page.settings.length,
+			listTheme(theme),
+			(id, value) => {
+				const spec = page.settings.find((candidate) => candidate.field === id);
+				if (!spec) return;
+				options.onChange(spec.field, value === spec.on);
+				// Show what is in effect now.
+				list.updateValue(id, loadConfig()[spec.field] ? spec.on : spec.off);
+			},
+			() => options.onClose(),
+		);
+		return list;
+	});
+	let active = 0;
 
-	const border = () => new DynamicBorder((text: string) => theme.fg("border", text));
-	const container = new Container();
-	container.addChild(border());
-	container.addChild(
-		new Text(`${theme.fg("accent", theme.bold("pi-cc settings"))}${theme.fg("dim", ` \u00b7 ${displayPath(options.file)}`)}`, 0, 0),
-	);
-	container.addChild(new Spacer(1));
-	container.addChild(list);
-	container.addChild(border());
+	const rule = (width: number) => theme.fg("dim", "\u2500".repeat(Math.max(0, width)));
+	const tabBar = (width: number) => {
+		const tabs = PAGES.map((page, index) =>
+			index === active ? theme.fg("text", theme.bold(page.label)) : theme.fg("dim", page.label),
+		).join(theme.fg("dim", " / "));
+		// The file the settings are saved in, on the right when it fits.
+		const file = displayPath(options.file);
+		const gap = width - visibleWidth(tabs) - visibleWidth(file);
+		return gap >= 2 ? `${tabs}${" ".repeat(gap)}${theme.fg("dim", file)}` : truncateToWidth(tabs, width);
+	};
+	/** The open page's list, without SettingsList's own hint: the panel has one below. */
+	const body = (width: number) => {
+		const lines = lists[active].render(width);
+		const hint = lines.findIndex((line) => line.includes("Esc to cancel"));
+		const kept = hint === -1 ? lines : lines.slice(0, hint);
+		while (kept.length > 0 && kept[kept.length - 1].trim() === "") kept.pop();
+		return kept;
+	};
 
 	return {
-		render: (width) => container.render(width),
-		invalidate: () => container.invalidate(),
-		handleInput: (data) => list.handleInput(data),
+		render: (width) => {
+			const safe = Math.max(0, Math.floor(width));
+			return [rule(safe), tabBar(safe), rule(safe), ...body(safe), rule(safe), truncateToWidth(theme.fg("dim", HINT), safe), rule(safe)];
+		},
+		invalidate: () => {
+			for (const list of lists) list.invalidate();
+		},
+		handleInput: (data) => {
+			if (isNextPageKey(data)) active = (active + 1) % PAGES.length;
+			else if (isPreviousPageKey(data)) active = (active - 1 + PAGES.length) % PAGES.length;
+			else lists[active].handleInput(data);
+		},
 	};
 }
 
@@ -204,10 +266,13 @@ function showSettings(ctx: ExtensionContext): void {
 	const config = loadConfig();
 	const lines = [
 		`pi-cc settings \u00b7 ${configPath()}`,
+		PAGES[0].label,
 		`  messages:  ${config.compactMessages ? "compact" : "card"}${overrideNote("compactMessages")}`,
 		`  footer:    ${config.footer ? "summary" : "hidden"}${overrideNote("footer")}`,
+		PAGES[1].label,
 		`  draft:     ${config.draft ? "on" : "off"}${overrideNote("draft")}`,
 		`  summary:   ${config.turnSummary ? "on" : "off"}${overrideNote("turnSummary")}`,
+		PAGES[2].label,
 		`  compact:   ${config.compaction ? "on" : "off"}${overrideNote("compaction")}`,
 		`  idle:      ${config.idleCompaction ? "on" : "off"}${overrideNote("idleCompaction")}`,
 		"",

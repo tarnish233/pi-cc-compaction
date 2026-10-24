@@ -94,7 +94,7 @@ Pi 的缓存保温（`cacheWarming`）和空闲压缩作用于同一份缓存，
 
 本包和 pi-cc-loop、pi-cc-monitor、pi-cc-plugins 共同提供 `/pi_cc`：pi-cc 家族的设置命令，装了几个包都只有一个。
 
-- 本包的两项：**CC compaction**（`compaction`，默认开）和 **Idle compaction**（`idleCompaction`，默认开）；`/pi_cc compact on|off`、`/pi_cc idle on|off` 切换
+- 本包的两项在面板的 Compact 页（Tab / Shift+Tab 切换页）：**CC compaction**（`compaction`，默认开）和 **Idle compaction**（`idleCompaction`，默认开）；`/pi_cc compact on|off`、`/pi_cc idle on|off` 切换
 - 切换即时生效，不用 `/reload`：阈值从下一次检查起变化，压缩从下一次起换回 Pi 的或本包的，保温当场关闭或恢复
 - 空闲压缩依赖 CC compaction：后者关掉时前者也不生效，保温随之恢复
 - 环境变量 `PI_CC_COMPACTION=0`、`PI_CC_IDLE_COMPACTION=0` 可临时覆盖，面板里相应项锁定
