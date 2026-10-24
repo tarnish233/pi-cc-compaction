@@ -46,7 +46,7 @@ Claude Code 则在原会话上分叉：system prompt、工具、消息、思考�
 
 压缩读的是缓存前缀，缓存热时很便宜；缓存一过期，下一次请求就要为整段对话重新付费。所以闲置太久时，趁缓存还热先压掉。
 
-- 缓存有效期取模型的 `promptCache`（Pi 的模型配置字段，Pi 的缓存保温也读它）：设了 `PI_CACHE_RETENTION=long` 用 `long` 档，否则用 `short` 档
+- 缓存有效期取模型的 `promptCache`（Pi 的模型配置字段，Pi 的缓存保温也读它）：`PI_CACHE_RETENTION=long` 用 `long` 档，否则用 `short` 档。和 Pi 发请求时的判断一致：先看 provider 自己的环境变量（`auth.json` 里该 provider 的 `env`），再看进程环境变量
 - **有效期 ≥1 小时才启用**，和 Claude Code 一致；5 分钟缓存不做，否则每次稍微离开都会压缩
 - 一轮结束后开始计时，在“上次请求 + 90% 有效期”时触发；触发时再确认：仍然空闲、没有排队消息、没有更新的请求、上下文 ≥20 万 token（`PI_CC_IDLE_COMPACT_MIN_TOKENS` 可调，最低 10 万）、没有迟到超过 1 分钟
 - 默认开启；没有配 `promptCache`（或不到 1 小时）的模型不会触发
@@ -57,7 +57,11 @@ Claude Code 则在原会话上分叉：system prompt、工具、消息、思考�
 { "id": "claude-opus-5-5", "promptCache": { "short": 300, "long": 3600 } }
 ```
 
-内置模型用 `modelOverrides` 配。Anthropic 的长缓存需要 `PI_CACHE_RETENTION=long`。
+内置模型用 `modelOverrides` 配。Anthropic 的长缓存需要 `PI_CACHE_RETENTION=long`，可以只给某个 provider 设：
+
+```json
+{ "cloudagent": { "type": "api_key", "key": "…", "env": { "PI_CACHE_RETENTION": "long" } } }
+```
 
 ### 缓存保温
 

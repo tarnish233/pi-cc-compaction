@@ -24,7 +24,7 @@ test("it fires at 90% of the lifetime, as Claude Code and Pi's warmer do", () =>
 	assert.equal(idle.idleMinTokens({ PI_CC_IDLE_COMPACT_MIN_TOKENS: "5000" }), 100_000, "not below Claude Code's floor");
 });
 
-function harness({ now = 1_000_000, tokens = 250_000, ttl = { long: 3600 }, idleNow = true, pending = false, env = { PI_CACHE_RETENTION: "long" } } = {}) {
+function harness({ now = 1_000_000, tokens = 250_000, ttl = { long: 3600 }, idleNow = true, pending = false, env = { PI_CACHE_RETENTION: "long" }, auth } = {}) {
 	const clock = { now };
 	const timers = [];
 	const compacts = [];
@@ -38,6 +38,7 @@ function harness({ now = 1_000_000, tokens = 250_000, ttl = { long: 3600 }, idle
 		getContextUsage: () => ({ tokens, contextWindow: 1_000_000 }),
 		sessionManager: { getSessionId: () => "idle-s" },
 		compact: (options) => compacts.push(options),
+		modelRegistry: { getApiKeyAndHeaders: async () => (auth instanceof Error ? Promise.reject(auth) : (auth ?? { ok: true })) },
 	};
 	const compactor = new idle.IdleCompactor({
 		now: () => clock.now,
@@ -54,10 +55,10 @@ function harness({ now = 1_000_000, tokens = 250_000, ttl = { long: 3600 }, idle
 	return { clock, timers, compacts, notices, ctx, compactor };
 }
 
-test("armed after a settled run: due at the last request plus 90% of an hour", () => {
+test("armed after a settled run: due at the last request plus 90% of an hour", async () => {
 	const h = harness();
 	patches.runtime().captures.set("idle-s", { payload: {}, leafId: "x", at: h.clock.now - 60_000 });
-	h.compactor.arm(h.ctx, ON);
+	await h.compactor.arm(h.ctx, ON);
 	assert.equal(h.timers.length, 1);
 	assert.equal(h.timers[0].ms, 3240_000 - 60_000);
 	h.clock.now += h.timers[0].ms;
@@ -67,7 +68,7 @@ test("armed after a settled run: due at the last request plus 90% of an hour", (
 	assert.deepEqual(h.notices.at(-1), { message: "Compacted while idle, before the prompt cache expired \u00b7 turn off with /pi_cc idle off", level: "info" });
 });
 
-test("not armed: settings off, short or unknown cache, small context, busy session, nothing captured", () => {
+test("not armed: settings off, short or unknown cache, small context, busy session, nothing captured", async () => {
 	const cases = [
 		["compaction off", {}, { compaction: false, idleCompaction: true }],
 		["idle off", {}, { compaction: true, idleCompaction: false }],
@@ -81,16 +82,16 @@ test("not armed: settings off, short or unknown cache, small context, busy sessi
 	for (const [label, options, config] of cases) {
 		const h = harness(options);
 		patches.runtime().captures.set("idle-s", { payload: {}, leafId: "x", at: h.clock.now });
-		h.compactor.arm(h.ctx, config);
+		await h.compactor.arm(h.ctx, config);
 		assert.equal(h.timers.length, 0, label);
 	}
 	const h = harness();
 	patches.runtime().captures.delete("idle-s");
-	h.compactor.arm(h.ctx, ON);
+	await h.compactor.arm(h.ctx, ON);
 	assert.equal(h.timers.length, 0, "no request yet: no cache to keep");
 });
 
-test("when it fires it checks again: a newer request, a busy session or a lapsed timer skip it", () => {
+test("when it fires it checks again: a newer request, a busy session or a lapsed timer skip it", async () => {
 	for (const [label, change] of [
 		["newer request", (h) => patches.runtime().captures.set("idle-s", { payload: {}, leafId: "y", at: h.clock.now })],
 		["busy", (h) => (h.ctx.isIdle = () => false)],
@@ -99,7 +100,7 @@ test("when it fires it checks again: a newer request, a busy session or a lapsed
 	]) {
 		const h = harness();
 		patches.runtime().captures.set("idle-s", { payload: {}, leafId: "x", at: h.clock.now });
-		h.compactor.arm(h.ctx, ON);
+		await h.compactor.arm(h.ctx, ON);
 		h.clock.now += h.timers[0].ms;
 		change(h);
 		h.timers[0].fn();
@@ -107,17 +108,54 @@ test("when it fires it checks again: a newer request, a busy session or a lapsed
 	}
 });
 
-test("re-arming or cancelling clears the timer; a failed compaction is reported", () => {
+test("re-arming or cancelling clears the timer; a failed compaction is reported", async () => {
 	const h = harness();
 	patches.runtime().captures.set("idle-s", { payload: {}, leafId: "x", at: h.clock.now });
-	h.compactor.arm(h.ctx, ON);
-	h.compactor.arm(h.ctx, ON);
+	await h.compactor.arm(h.ctx, ON);
+	await h.compactor.arm(h.ctx, ON);
 	assert.equal(h.timers[0].cleared, true);
 	h.compactor.cancel();
 	assert.equal(h.timers[1].cleared, true);
-	h.compactor.arm(h.ctx, ON);
+	await h.compactor.arm(h.ctx, ON);
 	h.clock.now += h.timers[2].ms;
 	h.timers[2].fn();
 	h.compacts[0].onError(new Error("boom"));
 	assert.deepEqual(h.notices.at(-1), { message: "Idle compaction failed: boom", level: "warning" });
+});
+
+test("a provider's own PI_CACHE_RETENTION (the env of its auth.json entry) picks the long tier, as Pi's requests do", async () => {
+	const h = harness({ env: {}, ttl: { short: 300, long: 3600 }, auth: { ok: true, env: { PI_CACHE_RETENTION: "long" } } });
+	patches.runtime().captures.set("idle-s", { payload: {}, leafId: "x", at: h.clock.now });
+	await h.compactor.arm(h.ctx, ON);
+	assert.equal(h.timers.length, 1);
+	assert.equal(h.timers[0].ms, 3240_000);
+	assert.equal(await idle.cacheRetentionTier(h.ctx, {}), "long");
+});
+
+test("the provider's value wins over the process environment, as in Pi", async () => {
+	const h = harness({ env: { PI_CACHE_RETENTION: "long" }, ttl: { short: 300, long: 3600 }, auth: { ok: true, env: { PI_CACHE_RETENTION: "short" } } });
+	patches.runtime().captures.set("idle-s", { payload: {}, leafId: "x", at: h.clock.now });
+	await h.compactor.arm(h.ctx, ON);
+	assert.equal(h.timers.length, 0, "the provider says short: a five-minute cache");
+});
+
+test("without the provider's environment, the process environment decides", async () => {
+	for (const auth of [new Error("no key"), { ok: false, error: "no key" }, { ok: true }]) {
+		const h = harness({ env: { PI_CACHE_RETENTION: "long" }, ttl: { short: 300, long: 3600 }, auth });
+		patches.runtime().captures.set("idle-s", { payload: {}, leafId: "x", at: h.clock.now });
+		await h.compactor.arm(h.ctx, ON);
+		assert.equal(h.timers.length, 1, String(auth?.message ?? auth?.error ?? "no env"));
+	}
+});
+
+test("a cancel while the provider is looked up wins", async () => {
+	let release;
+	const h = harness({ env: {}, ttl: { long: 3600 } });
+	h.ctx.modelRegistry.getApiKeyAndHeaders = () => new Promise((resolve) => (release = resolve));
+	patches.runtime().captures.set("idle-s", { payload: {}, leafId: "x", at: h.clock.now });
+	const armed = h.compactor.arm(h.ctx, ON);
+	h.compactor.cancel();
+	release({ ok: true, env: { PI_CACHE_RETENTION: "long" } });
+	await armed;
+	assert.equal(h.timers.length, 0);
 });

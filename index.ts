@@ -86,7 +86,7 @@ export default function piCcCompact(pi: ExtensionAPI): void {
 	pi.on("agent_settled", async (_event, ctx) => {
 		lastCtx = ctx;
 		const config = loadConfig();
-		idle.arm(ctx, config);
+		await idle.arm(ctx, config);
 		// Pi's live settings object shows up with the first threshold check: make its memory agree.
 		if (warmingBlocked(config) && rt.settings?.getCacheWarmingMode && rt.settings.getCacheWarmingMode() !== "off") await syncWarming(ctx);
 	});
