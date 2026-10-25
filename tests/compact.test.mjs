@@ -106,6 +106,22 @@ test("the fork: the answered request plus Claude Code's ask; what came after it 
 	assert.ok(c.summary.includes(prompt.KEPT_MESSAGES_NOTE));
 });
 
+test("the compaction record names the model that wrote the summary, the way Pi's replies do", async () => {
+	const entries = conversation();
+	answered("s1");
+	const named = { ...reply("<summary>S</summary>"), provider: "p", model: "m", responseModel: "m-2026-01" };
+	let { ctx } = fakeCtx({ entries, replies: [named] });
+	let details = (await compact.handleCompaction(event(entries), ctx, ON, NO_WAIT)).compaction.details;
+	assert.deepEqual([details.provider, details.model, details.responseModel], ["p", "m", "m-2026-01"]);
+
+	// A reply that does not say: the model the fork was sent to.
+	answered("s1");
+	({ ctx } = fakeCtx({ entries, replies: [reply("<summary>S</summary>")] }));
+	details = (await compact.handleCompaction(event(entries), ctx, ON, NO_WAIT)).compaction.details;
+	assert.deepEqual([details.provider, details.model], [MODEL.provider, MODEL.id]);
+	assert.equal("responseModel" in details, false);
+});
+
 test("no cache to read: Pi's own compaction runs, and the user is told why, once", async () => {
 	const entries = conversation();
 	const cases = [

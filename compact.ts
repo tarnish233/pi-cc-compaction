@@ -73,6 +73,14 @@ export interface CompactEventLike {
 
 export interface CompactionDetails {
 	engine: "fork";
+	/**
+	 * The model that wrote the summary, named as Pi names it on a reply
+	 * (provider, model, responseModel): Pi's compaction entry has no such
+	 * field, so usage tools reading the session could not tell.
+	 */
+	provider: string;
+	model: string;
+	responseModel?: string;
 	stopReason: string;
 	/** Fork attempts, retries included. */
 	attempts: number;
@@ -216,7 +224,16 @@ export async function handleCompaction(
 		keptMessages: kept.length > 0,
 		restored: restoreBlocks(restoredFiles),
 	});
-	const details: CompactionDetails = { engine: "fork", stopReason: result.stopReason, attempts: result.attempts, restoredFiles };
+	const model = ctx.model as { provider: string; id: string };
+	const details: CompactionDetails = {
+		engine: "fork",
+		provider: result.provider || model.provider,
+		model: result.model || model.id,
+		...(result.responseModel ? { responseModel: result.responseModel } : {}),
+		stopReason: result.stopReason,
+		attempts: result.attempts,
+		restoredFiles,
+	};
 	return {
 		compaction: {
 			summary,

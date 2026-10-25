@@ -71,16 +71,23 @@ export function buildForkPayload(api: string, payload: unknown, ask: string): Pa
 }
 
 export type ForkResult =
-	| { ok: true; reply: string; usage: unknown; stopReason: string }
+	| { ok: true; reply: string; usage: unknown; stopReason: string; provider?: string; model?: string; responseModel?: string }
 	| { ok: false; reason: string; retryable?: boolean; overflow?: boolean };
 
 /** A provider reply, as far as a summary needs it. */
 export interface ReplyLike {
+	provider?: string;
+	model?: string;
+	/** The model the provider says answered, when it differs from the one asked. */
+	responseModel?: string;
 	stopReason?: string;
 	errorMessage?: string;
 	content?: Array<{ type: string; text?: string }>;
 	usage?: unknown;
 }
+
+/** How a reply names the model that wrote it. */
+const NAME_FIELDS = ["provider", "model", "responseModel"] as const;
 
 /**
  * Read a summary reply. A reply cut off by the output cap is kept, as Claude
@@ -107,7 +114,8 @@ export function interpretReply(response: ReplyLike, contextWindow?: number): For
 		.join("\n")
 		.trim();
 	if (!reply) return { ok: false, reason: "empty reply" };
-	return { ok: true, reply, usage: response.usage, stopReason: response.stopReason ?? "stop" };
+	const named = Object.fromEntries(NAME_FIELDS.filter((field) => response[field]).map((field) => [field, response[field]]));
+	return { ok: true, reply, usage: response.usage, stopReason: response.stopReason ?? "stop", ...named };
 }
 
 /** A request Pi's provider code can build; its body is replaced before sending. */
