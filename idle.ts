@@ -10,6 +10,12 @@
  * one-hour caches: on a five-minute cache that would compact every short
  * break.
  *
+ * Here it fires earlier, at 75% of the lifetime (45 minutes of an hour), and
+ * from 100K tokens of context (Claude Code's floor; its default is 200K): a
+ * provider keeps a cache on a best-effort basis, so a quarter of the lifetime
+ * leaves room for one that goes early, and a 100K re-read already costs more
+ * than the summary.
+ *
  * The lifetime is the one the request to fork asked for, decided when its
  * reply arrives (requestTtlMs): the model's promptCache for the tier the
  * request used (a long-retention marker in it means the long tier), or else
@@ -18,8 +24,8 @@
  * defines. Anything else is unknown. Without a lifetime of an hour or more,
  * nothing happens. The timer starts when a run settles and counts from the last
  * request; when it fires the conditions are checked again: still idle,
- * nothing queued, no newer request, at least 200K tokens of context (Claude
- * Code's default; PI_CC_IDLE_COMPACT_MIN_TOKENS changes it, not below 100K),
+ * nothing queued, no newer request, at least 100K tokens of context
+ * (PI_CC_IDLE_COMPACT_MIN_TOKENS raises it),
  * and not more than a minute late. The compaction goes through Pi
  * (ctx.compact), so it is the ordinary pi-cc-compaction compaction.
  */
@@ -29,9 +35,14 @@ import { runtime } from "./patches.ts";
 
 /** Claude Code idles-compacts only one-hour caches. */
 export const IDLE_MIN_TTL_MS = 3600_000;
-/** Claude Code's minimum context for an idle compaction, and the floor of its override. */
-export const IDLE_DEFAULT_MIN_TOKENS = 200_000;
+/**
+ * The minimum context for an idle compaction: Claude Code's floor (its
+ * default is 200K). Below it a re-read costs little; the override only raises it.
+ */
 export const IDLE_FLOOR_MIN_TOKENS = 100_000;
+export const IDLE_DEFAULT_MIN_TOKENS = IDLE_FLOOR_MIN_TOKENS;
+/** When in the lifetime it fires: 45 minutes of an hour (Claude Code: 90%). */
+export const IDLE_FRACTION = 0.75;
 /** A timer this late finds the cache likely gone (Claude Code's "lapsed"). */
 export const IDLE_LATE_MS = 60_000;
 
@@ -79,9 +90,9 @@ export function requestTtlMs(payload: unknown, model: unknown): number | undefin
 	return ttlForTier(model as PromptCacheModel, long ? "long" : "short") ?? (hour ? ANTHROPIC_HOUR_MS : undefined);
 }
 
-/** 90% of the lifetime, with ten seconds of margin at least: when Claude Code and Pi's warmer act. */
+/** How long after the last request it fires: 75% of the lifetime. */
 export function idleDelayMs(ttlMs: number): number {
-	return Math.max(1, Math.floor(Math.min(ttlMs * 0.9, ttlMs - 10_000)));
+	return Math.floor(ttlMs * IDLE_FRACTION);
 }
 
 export function idleMinTokens(env: Env = process.env): number {
@@ -147,7 +158,7 @@ export class IdleCompactor {
 		this.timer = this.setTimer(() => this.fire(ctx, config, plan), Math.max(0, plan.due - this.now()));
 	}
 
-	/** Due at 90% of the lifetime of the last answered request's cache, when that is an hour or more. */
+	/** Due at 75% of the lifetime of the last answered request's cache, when that is an hour or more. */
 	private plan(ctx: IdleContext): { due: number; requestAt: number } | undefined {
 		const capture = runtime().captures.get(ctx.sessionManager.getSessionId());
 		if (capture?.ttlMs === undefined || capture.ttlMs < IDLE_MIN_TTL_MS) return undefined;

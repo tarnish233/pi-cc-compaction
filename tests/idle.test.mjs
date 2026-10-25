@@ -42,10 +42,10 @@ test("a request of any other shape has no known lifetime, and never throws", () 
 	assert.equal(idle.requestTtlMs({ system: "S", tools: "x", messages: [null, { content: 5 }, { content: [null] }] }, undefined), undefined);
 });
 
-test("it fires at 90% of the lifetime, as Claude Code and Pi's warmer do", () => {
-	assert.equal(idle.idleDelayMs(HOUR), 3240_000);
-	assert.equal(idle.idleDelayMs(60_000), 50_000, "ten seconds of margin at least");
-	assert.equal(idle.idleMinTokens({}), 200_000);
+test("it fires at 75% of the lifetime (45 minutes of an hour), from 100K tokens of context", () => {
+	assert.equal(idle.idleDelayMs(HOUR), 2700_000);
+	assert.equal(idle.idleDelayMs(2 * HOUR), 5400_000);
+	assert.equal(idle.idleMinTokens({}), 100_000);
 	assert.equal(idle.idleMinTokens({ PI_CC_IDLE_COMPACT_MIN_TOKENS: "150000" }), 150_000);
 	assert.equal(idle.idleMinTokens({ PI_CC_IDLE_COMPACT_MIN_TOKENS: "5000" }), 100_000, "not below Claude Code's floor");
 });
@@ -80,12 +80,12 @@ function harness({ now = 1_000_000, tokens = 250_000, idleNow = true, pending = 
 	return { clock, timers, compacts, notices, ctx, compactor };
 }
 
-test("armed after a settled run: due at the last request plus 90% of an hour", async () => {
+test("armed after a settled run: due 45 minutes after the last request on an hour's cache", async () => {
 	const h = harness();
 	patches.runtime().captures.set("idle-s", { payload: {}, leafId: "x", at: h.clock.now - 60_000, ttlMs: HOUR });
 	await h.compactor.arm(h.ctx, ON);
 	assert.equal(h.timers.length, 1);
-	assert.equal(h.timers[0].ms, 3240_000 - 60_000);
+	assert.equal(h.timers[0].ms, 2700_000 - 60_000);
 	h.clock.now += h.timers[0].ms;
 	h.timers[0].fn();
 	assert.equal(h.compacts.length, 1, "compacts through Pi, so the fork reads the still-warm cache");
@@ -100,7 +100,7 @@ test("not armed: settings off, short or unknown cache, small context, busy sessi
 		["five-minute cache", { ttlMs: 300_000 }, ON],
 		["half-hour cache", { ttlMs: 1800_000 }, ON],
 		["unknown lifetime", { ttlMs: undefined }, ON],
-		["small context", { tokens: 199_999 }, ON],
+		["small context", { tokens: 99_999 }, ON],
 		["busy", { idleNow: false }, ON],
 		["queued messages", { pending: true }, ON],
 	];
@@ -111,6 +111,10 @@ test("not armed: settings off, short or unknown cache, small context, busy sessi
 		await h.compactor.arm(h.ctx, config);
 		assert.equal(h.timers.length, 0, label);
 	}
+	const enough = harness({ tokens: 100_000 });
+	patches.runtime().captures.set("idle-s", { payload: {}, leafId: "x", at: enough.clock.now, ttlMs: HOUR });
+	await enough.compactor.arm(enough.ctx, ON);
+	assert.equal(enough.timers.length, 1, "100K tokens of context is enough");
 	const h = harness();
 	patches.runtime().captures.delete("idle-s");
 	await h.compactor.arm(h.ctx, ON);
