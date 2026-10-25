@@ -26,6 +26,7 @@ ln -sfn "$PWD" ~/.pi/agent/extensions/pi-cc-compaction
 | Claude Code 的提示词 | 九段式摘要（先 `<analysis>` 再 `<summary>`），`/compact <指令>` 作为 Additional Instructions；摘要带 Claude Code 的续接说明 | `prompt.ts` |
 | 压缩后补回文件 | 重读最近读写过的 5 个文件（每个 ≤5K token，合计 ≤50K），太大的只留一句提示 | `restore.ts` |
 | 空闲压缩 | 缓存有效期 ≥1 小时的模型，闲置到有效期的 75%（1 小时缓存即 45 分钟）且上下文 ≥10 万 token 时先压缩 | `idle.ts` |
+| 压缩提示 | 每次压缩后说明是本包还是 Pi 压缩的，交给 Pi 时写明原因 | `compact.ts` |
 
 ## 压缩怎么做
 
@@ -51,7 +52,7 @@ Claude Code 则在原会话上分叉：system prompt、工具、消息、思考�
 | `Compacted by Pi's own compaction · <原因>` | 读不到缓存，交给了 Pi 自己的压缩，原因见下表 |
 | `Compacted while idle, before the prompt cache expired · …` | 本包的[空闲压缩](#空闲压缩) |
 
-`/pi_cc compact off` 时压缩都是 Pi 的，不加这一行。这行要等 Pi 重绘完对话才显示：Pi 存好压缩后会清空对话区再重绘，在那之前显示的提示会被一起清掉。
+`/pi_cc compact off` 时压缩都是 Pi 的，不加这一行。
 
 ### 读不到缓存时：交给 Pi
 
@@ -127,7 +128,7 @@ Claude Code 则在原会话上分叉：system prompt、工具、消息、思考�
 
 ```bash
 node --test tests/*.test.mjs
-npx --yes typescript@5.9.3 tsc --noEmit -p tsconfig.json
+npx --yes -p typescript@5.9.3 tsc --noEmit -p tsconfig.json
 ```
 
 测试加载真实的 Pi 模块（在 Pi 自己的 `SettingsManager`、`ExtensionRunner` 上安装补丁，用 Pi 的 `SettingsManager` 读写临时目录里的 `settings.json`）。
