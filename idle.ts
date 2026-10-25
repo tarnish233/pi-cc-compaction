@@ -126,6 +126,8 @@ function isReportedCompactionError(error: Error): boolean {
 
 export class IdleCompactor {
 	private timer: unknown;
+	/** Its compaction is in flight: from ctx.compact until it completes or fails. */
+	compacting = false;
 	private readonly now: () => number;
 	private readonly env: Env;
 	private readonly setTimer: (fn: () => void, ms: number) => unknown;
@@ -186,9 +188,14 @@ export class IdleCompactor {
 			// compact.ts already reports a failed compaction as a manual /compact
 			// would (it cannot tell an idle pass from a typed one), so a failure it
 			// shows is not repeated here; anything else is.
+			this.compacting = true;
 			ctx.compact({
-				onComplete: () => this.notify(ctx, IDLE_NOTICE, "info"),
+				onComplete: () => {
+					this.compacting = false;
+					this.notify(ctx, IDLE_NOTICE, "info");
+				},
 				onError: (error) => {
+					this.compacting = false;
 					if (isReportedCompactionError(error)) return;
 					this.notify(ctx, `Idle compaction failed: ${error.message}`, "warning");
 				},

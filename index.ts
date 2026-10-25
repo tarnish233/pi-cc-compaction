@@ -22,7 +22,7 @@
 
 import { ExtensionRunner, SettingsManager, type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
 import * as breaker from "./breaker.ts";
-import { handleCompaction } from "./compact.ts";
+import { compactionNotice, handleCompaction } from "./compact.ts";
 import { invalidateConfig, loadConfig } from "./config.ts";
 import { IdleCompactor, requestTtlMs } from "./idle.ts";
 import { ccReserveTokens, commitPending, forgetSession, installPatches, runtime } from "./patches.ts";
@@ -110,11 +110,16 @@ export default function piCcCompact(pi: ExtensionAPI): void {
 	});
 	// Compacted: the conversation now starts with the summary, a new prefix the
 	// next request caches. Any success also forgives earlier failures.
-	pi.on("session_compact", (_event, ctx) => {
+	pi.on("session_compact", (event, ctx) => {
 		idle.cancel();
 		const sessionId = ctx.sessionManager.getSessionId();
 		forgetSession(sessionId);
 		breaker.noteSuccess(sessionId);
+		// Whose compaction it was. Pi clears and redraws the transcript right
+		// after this event (compaction_end, in the same tick): the notice waits
+		// for the next one, or the redraw would wipe it.
+		const notice = compactionNotice(sessionId, event, { idle: idle.compacting });
+		if (notice) setTimeout(() => notify(ctx, notice, "info"), 0);
 	});
 
 	// Another branch: the held request's prefix no longer leads here.
@@ -127,7 +132,7 @@ export default function piCcCompact(pi: ExtensionAPI): void {
 	// answered request is still the one to fork, and a request still in flight
 	// still gets its reply. The extension was never in this session's turns
 	// (loaded mid-session): there is no capture to keep, and that compaction
-	// falls back to Pi's, which says so once.
+	// falls back to Pi's, which the notice after it says.
 	pi.on("session_shutdown", (event, ctx) => {
 		idle.cancel();
 		try {

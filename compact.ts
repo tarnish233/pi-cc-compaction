@@ -7,7 +7,8 @@
  * so the summary costs a summary, not a re-read of the conversation. When no
  * cache can be read (nothing answered yet, another model, an expired cache,
  * an API that cannot be forked), Pi's own compaction runs, with Pi's own
- * settings, and the user is told why once.
+ * settings. Either way the user is told whose compaction it was, and why
+ * not this package's (compactionNotice).
  *
  * What is kept verbatim. Claude Code keeps the last API round and summarizes
  * the rest. Here that round is whatever followed the forked request: its
@@ -95,12 +96,28 @@ export interface CompactDeps {
 
 type Ctx = Pick<ExtensionContext, "model" | "modelRegistry" | "sessionManager" | "cwd" | "hasUI" | "ui">;
 
-/** "Pi's own compaction ran" is told once per session and reason. */
-const told = new Set<string>();
+export const FORKED_NOTICE = "Compacted by pi-cc-compaction";
 
-/** Forget which notices were given (tests). */
-export function resetNotices(): void {
-	told.clear();
+/** Why a session's compaction was handed to Pi, until the notice after it. */
+const handedToPi = new Map<string, string>();
+
+/**
+ * What to say once a compaction is stored: whose it was. Said after Pi has
+ * redrawn the transcript (index.ts), since a line shown during the
+ * compaction vanishes with the redraw. Nothing for a compaction this package
+ * had no part in (turned off, another extension's), or for an idle fork,
+ * which idle.ts announces itself.
+ */
+export function compactionNotice(
+	sessionId: string,
+	event: { fromExtension?: boolean; compactionEntry?: { details?: unknown } },
+	options: { idle?: boolean } = {},
+): string | undefined {
+	const reason = handedToPi.get(sessionId);
+	handedToPi.delete(sessionId);
+	if ((event.compactionEntry?.details as { engine?: unknown } | undefined)?.engine === "fork") return options.idle ? undefined : FORKED_NOTICE;
+	if (!event.fromExtension && reason) return `Compacted by Pi's own compaction \u00b7 ${reason}`;
+	return undefined;
 }
 
 function notify(ctx: Ctx, message: string, level: "info" | "warning" | "error"): void {
@@ -169,8 +186,9 @@ export async function handleCompaction(
 	config: Pick<PiCcConfig, "compaction">,
 	deps: CompactDeps = {},
 ): Promise<SessionBeforeCompactResult | undefined> {
-	if (!config.compaction || !ctx.model) return undefined;
 	const sessionId = ctx.sessionManager.getSessionId();
+	handedToPi.delete(sessionId);
+	if (!config.compaction || !ctx.model) return undefined;
 	const reason = event.reason ?? "manual";
 	if (reason !== "manual" && breaker.isOpen(sessionId)) return { cancel: true };
 	if (reason === "threshold" && breaker.noteAutoCompaction(sessionId)) {
@@ -181,14 +199,10 @@ export async function handleCompaction(
 	const plan = forkPlan(sessionId, ctx.model as { provider?: string; id?: string; api?: string }, (deps.now ?? Date.now)());
 	const branch = event.branchEntries ?? (ctx.sessionManager.getBranch() as EntryLike[]);
 	const leafIndex = plan.ok ? branch.findIndex((entry) => entry.id === plan.capture.leafId) : -1;
-	// No cache can be read: Pi's own compaction runs, with Pi's own settings,
-	// and the reason is said once.
+	// No cache can be read: Pi's own compaction runs, with Pi's own settings;
+	// the notice after it says why.
 	if (!plan.ok) {
-		const key = `${sessionId}\u0000${plan.reason}`;
-		if (!told.has(key)) {
-			told.add(key);
-			notify(ctx, `pi-cc-compaction: ${plan.reason} \u00b7 Pi's own compaction ran`, "info");
-		}
+		handedToPi.set(sessionId, plan.reason);
 		return undefined;
 	}
 	// The captured request cannot be matched to this branch (a fork away): Pi

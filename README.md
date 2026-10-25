@@ -41,9 +41,21 @@ Claude Code 则在原会话上分叉：system prompt、工具、消息、思考�
 5. **截断照收**：摘要被输出上限截断时照样采用，和 Claude Code 一样（Pi 自带的压缩会报 “generation hit the token cap”）。
 6. **记下模型**：Pi 的压缩记录本身不写模型，本包在记录的 `details` 里写上做摘要的 `provider`、`model`（以及 `responseModel`，若有），字段名和 Pi 回复消息上的一致，读会话日志的用量工具可以据此认出模型。
 
+### 是谁压缩的
+
+每次压缩完成，Pi 的 `[compaction]` 框下面多一行，说明这次是谁做的：
+
+| 提示 | 含义 |
+| --- | --- |
+| `Compacted by pi-cc-compaction` | 本包分叉压缩，读缓存 |
+| `Compacted by Pi's own compaction · <原因>` | 读不到缓存，交给了 Pi 自己的压缩，原因见下表 |
+| `Compacted while idle, before the prompt cache expired · …` | 本包的[空闲压缩](#空闲压缩) |
+
+`/pi_cc compact off` 时压缩都是 Pi 的，不加这一行。这行要等 Pi 重绘完对话才显示：Pi 存好压缩后会清空对话区再重绘，在那之前显示的提示会被一起清掉。
+
 ### 读不到缓存时：交给 Pi
 
-以下情况任何请求都读不到缓存，压缩交给 Pi 自己的压缩，并提示一次原因：
+以下情况任何请求都读不到缓存，压缩交给 Pi 自己的压缩，压缩后的提示里写明原因：
 
 | 情况 | 原因 |
 | --- | --- |

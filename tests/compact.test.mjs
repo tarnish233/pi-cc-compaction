@@ -122,7 +122,7 @@ test("the compaction record names the model that wrote the summary, the way Pi's
 	assert.equal("responseModel" in details, false);
 });
 
-test("no cache to read: Pi's own compaction runs, and the user is told why, once", async () => {
+test("no cache to read: Pi's own compaction runs; the notice after it says it was Pi's, and why", async () => {
 	const entries = conversation();
 	const cases = [
 		["no request answered", () => patches.runtime().captures.delete("s1"), MODEL, /no request has been answered yet/],
@@ -133,14 +133,36 @@ test("no cache to read: Pi's own compaction runs, and the user is told why, once
 	for (const [label, arrange, model, pattern] of cases) {
 		arrange();
 		const { ctx, seen } = fakeCtx({ entries, model, sessionId: `s1` });
-		compact.resetNotices();
-		assert.equal(await compact.handleCompaction(event(entries), ctx, ON, NO_WAIT), undefined, label);
 		assert.equal(await compact.handleCompaction(event(entries), ctx, ON, NO_WAIT), undefined, label);
 		assert.equal(seen.sent.length, 0, `${label}: nothing sent`);
-		assert.equal(seen.notices.length, 1, `${label}: told once`);
-		assert.match(seen.notices[0].message, pattern);
-		assert.match(seen.notices[0].message, /Pi's own compaction/);
+		// Pi redraws the transcript once the compaction is stored: a line shown now would vanish.
+		assert.deepEqual(seen.notices, [], `${label}: nothing said before the compaction`);
+		const notice = compact.compactionNotice("s1", { fromExtension: false, compactionEntry: { details: { readFiles: [] } } });
+		assert.match(notice, /^Compacted by Pi's own compaction \u00b7 /, label);
+		assert.match(notice, pattern, label);
+		assert.equal(compact.compactionNotice("s1", { fromExtension: false, compactionEntry: {} }), undefined, `${label}: one notice per compaction`);
 	}
+});
+
+test("a fork's notice names this package; an idle fork's is the idle compaction's own", async () => {
+	const entries = conversation();
+	answered("s1");
+	const { ctx, seen } = fakeCtx({ entries, replies: [reply("<summary>S</summary>")] });
+	const stored = { fromExtension: true, compactionEntry: { details: (await compact.handleCompaction(event(entries), ctx, ON, NO_WAIT)).compaction.details } };
+	assert.deepEqual(seen.notices, []);
+	assert.equal(compact.compactionNotice("s1", stored), "Compacted by pi-cc-compaction");
+	assert.equal(compact.compactionNotice("s1", stored, { idle: true }), undefined, "idle.ts says 'Compacted while idle'");
+});
+
+test("no notice for a compaction this package had no part in: turned off, or another extension's", async () => {
+	const entries = conversation();
+	patches.runtime().captures.delete("s1");
+	const { ctx } = fakeCtx({ entries });
+	// Handed to Pi, and Pi's compaction failed: no session_compact took the reason.
+	assert.equal(await compact.handleCompaction(event(entries), ctx, ON, NO_WAIT), undefined);
+	assert.equal(await compact.handleCompaction(event(entries), ctx, { ...ON, compaction: false }, NO_WAIT), undefined);
+	assert.equal(compact.compactionNotice("s1", { fromExtension: false, compactionEntry: {} }), undefined, "turned off: the user chose Pi's");
+	assert.equal(compact.compactionNotice("s1", { fromExtension: true, compactionEntry: { details: { engine: "other" } } }), undefined);
 });
 
 test("an answered request that is not on this branch cancels instead of handing Pi a keepRecentTokens:1 it never chose", async () => {
@@ -148,7 +170,6 @@ test("an answered request that is not on this branch cancels instead of handing 
 	// The capture points at an entry that is not on the branch (a fork away).
 	answered("s1", "gone-from-branch");
 	const { ctx, seen } = fakeCtx({ entries });
-	compact.resetNotices();
 	assert.deepEqual(await compact.handleCompaction(event(entries), ctx, ON, NO_WAIT), { cancel: true });
 	assert.equal(seen.sent.length, 0, "nothing is sent");
 	assert.match(seen.notices[0].message, /not on this branch/);

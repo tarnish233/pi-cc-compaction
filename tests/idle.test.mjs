@@ -87,9 +87,14 @@ test("armed after a settled run: due 45 minutes after the last request on an hou
 	assert.equal(h.timers.length, 1);
 	assert.equal(h.timers[0].ms, 2700_000 - 60_000);
 	h.clock.now += h.timers[0].ms;
+	assert.equal(h.compactor.compacting, false);
 	h.timers[0].fn();
 	assert.equal(h.compacts.length, 1, "compacts through Pi, so the fork reads the still-warm cache");
+	assert.equal(h.compactor.compacting, true, "its compaction is in flight");
+	h.compactor.cancel();
+	assert.equal(h.compactor.compacting, true, "session_compact cancels the timer, not the compaction in flight");
 	h.compacts[0].onComplete({});
+	assert.equal(h.compactor.compacting, false);
 	assert.deepEqual(h.notices.at(-1), { message: "Compacted while idle, before the prompt cache expired \u00b7 turn off with /pi_cc idle off", level: "info" });
 });
 
@@ -149,7 +154,9 @@ test("re-arming or cancelling clears the timer; a failed compaction is reported 
 	await h.compactor.arm(h.ctx, ON);
 	h.clock.now += h.timers[2].ms;
 	h.timers[2].fn();
+	assert.equal(h.compactor.compacting, true);
 	h.compacts[0].onError(new Error("Compaction cancelled"));
+	assert.equal(h.compactor.compacting, false, "a failed one is over too");
 	// ctx.compact is a manual compaction as far as compact.ts knows: it already
 	// showed the failure; the idle pass says nothing more.
 	assert.deepEqual(h.notices, []);

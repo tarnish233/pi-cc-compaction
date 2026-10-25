@@ -119,6 +119,20 @@ test("the request that becomes the one to fork carries its cache lifetime, as th
 	patches.forgetSession("index-s");
 });
 
+test("after a compaction, whose it was is said once Pi has redrawn the transcript", async () => {
+	// Pi emits session_compact, then compaction_end, which clears the chat and
+	// renders it again: a line shown from the handler itself would vanish.
+	const notices = [];
+	const stored = { fromExtension: true, reason: "manual", compactionEntry: { details: { engine: "fork" } } };
+	await host.emit("session_compact", stored, ctx(notices));
+	assert.deepEqual(notices, [], "nothing before the redraw");
+	await tick();
+	assert.deepEqual(notices, [{ message: "Compacted by pi-cc-compaction", level: "info" }]);
+	await host.emit("session_compact", { fromExtension: false, reason: "manual", compactionEntry: {} }, ctx(notices));
+	await tick();
+	assert.equal(notices.length, 1, "Pi's compaction, not handed over by this package: nothing to say");
+});
+
 test("with compaction off, a compaction is left to Pi", async () => {
 	process.env.PI_CC_COMPACTION = "0";
 	config.invalidateConfig();
