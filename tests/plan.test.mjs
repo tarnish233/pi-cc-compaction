@@ -18,6 +18,13 @@ test("a fork is planned from the last answered request of this model, while its 
 	assert.equal(plan.forkPlan("p2", MODEL, 10 ** 13).ok, true, "a model without promptCache: its cache cannot be known to be gone");
 });
 
+test("the model is the one the reply came from, not the body's model field (samplingParams can rename it)", () => {
+	// models.json samplingParams { model: "mode-…" } is merged into the body by
+	// pi-ai: the provider gets "mode-x" while Pi's model is still p/m.
+	commit("p7", { payload: { model: "mode-x", messages: [] }, modelKey: "p/m" });
+	assert.equal(plan.forkPlan("p7", MODEL, 0).ok, true);
+});
+
 test("no fork, and the reason, when no cache can be read", () => {
 	patches.runtime().captures.delete("p3");
 	assert.deepEqual(plan.forkPlan("p3", MODEL, 0), { ok: false, reason: "no request has been answered yet in this session" });

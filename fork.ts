@@ -146,19 +146,25 @@ const CAP_FIELDS = ["max_tokens", "max_completion_tokens", "max_output_tokens"] 
 /** Room for the ask, plus Pi's own 4096-token margin. */
 export const OVERFLOW_CAP_CUT = 8192;
 const CAP_FLOOR = 4096;
+/** The answer room Pi keeps above an Anthropic thinking budget (budget <= max_tokens - 1024). */
+const THINKING_ANSWER_ROOM = 1024;
 
 /**
  * The payload with its output cap lowered, for a fork that overflowed by the
  * few tokens of the ask: the request it extends fitted, with Pi's margin.
- * The cap is not part of the cached prefix. Undefined when there is no cap,
- * or nothing above the floor to take.
+ * The cap is not part of the cached prefix; an Anthropic thinking budget is
+ * (and max_tokens must stay above it), so the cap stops at Pi's answer room
+ * over the budget. Undefined when there is no cap, or nothing above the
+ * floor to take.
  */
 export function lowerOutputCap(payload: Payload, by: number): Payload | undefined {
+	const budget = (payload.thinking as { budget_tokens?: unknown } | undefined)?.budget_tokens;
+	const floor = Math.max(CAP_FLOOR, typeof budget === "number" ? budget + THINKING_ANSWER_ROOM : 0);
 	for (const field of CAP_FIELDS) {
 		const cap = payload[field];
 		if (typeof cap !== "number") continue;
-		if (cap <= CAP_FLOOR) return undefined;
-		return { ...payload, [field]: Math.max(CAP_FLOOR, cap - by) };
+		if (cap <= floor) return undefined;
+		return { ...payload, [field]: Math.max(floor, cap - by) };
 	}
 	return undefined;
 }

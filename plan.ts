@@ -27,8 +27,10 @@ export function forkPlan(sessionId: string | undefined, model: { provider?: stri
 	if (!model) return { ok: false, reason: "there is no model" };
 	const capture = sessionId === undefined ? undefined : runtime().captures.get(sessionId);
 	if (!capture) return { ok: false, reason: "no request has been answered yet in this session" };
+	// The reply's provider/model decides (turn_end records it): the body's model
+	// field can differ from Pi's model id (samplingParams { model } renames it).
 	const sameModel = capture.modelKey !== undefined ? capture.modelKey === `${model.provider}/${model.id}` : capture.payload.model === model.id;
-	if (!sameModel || capture.payload.model !== model.id) return { ok: false, reason: "the last request went to another model" };
+	if (!sameModel) return { ok: false, reason: "the last request went to another model" };
 	if (!model.api || !FORKABLE_APIS.has(model.api)) return { ok: false, reason: `${model.api ?? "this API's"} requests cannot be forked` };
 	if (capture.ttlMs !== undefined && now - capture.at >= capture.ttlMs) return { ok: false, reason: "the prompt cache has expired" };
 	return { ok: true, capture };

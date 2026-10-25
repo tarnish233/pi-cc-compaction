@@ -159,6 +159,16 @@ test("lowerOutputCap: only the output cap field moves, never below 4096", () => 
 	assert.equal(fork.lowerOutputCap({ messages: [] }, 8192), undefined, "no cap to lower");
 });
 
+test("lowerOutputCap: an Anthropic thinking budget keeps Pi's 1024 tokens of answer room above it", () => {
+	// max_tokens must stay above thinking.budget_tokens (a 400 otherwise), and the
+	// budget itself cannot move: thinking settings are part of the cached request.
+	const thinking = { type: "enabled", budget_tokens: 16000 };
+	assert.deepEqual(fork.lowerOutputCap({ max_tokens: 32000, thinking }, 8192), { max_tokens: 23808, thinking }, "room enough: the full cut");
+	assert.deepEqual(fork.lowerOutputCap({ max_tokens: 20000, thinking }, 8192), { max_tokens: 17024, thinking }, "cut down to budget + 1024");
+	assert.equal(fork.lowerOutputCap({ max_tokens: 17024, thinking }, 8192), undefined, "nothing above budget + 1024 to take");
+	assert.deepEqual(fork.lowerOutputCap({ max_tokens: 32000, thinking: { type: "adaptive" } }, 8192), { max_tokens: 23808, thinking: { type: "adaptive" } }, "adaptive thinking has no budget");
+});
+
 function scripted(replies, seen) {
 	return {
 		model: { provider: "p", id: "m", api: "openai-completions", contextWindow: 1000 },

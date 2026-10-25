@@ -12,8 +12,8 @@
  *        compaction from reaching this extension. Claude Code compacts any
  *        conversation of two rounds or more; what stays verbatim is decided
  *        here, not by Pi.
- *    The wrapper also remembers Pi's live settings object, the only way to
- *    change cacheWarming in memory as well as in settings.json.
+ *    The wrapper also remembers Pi's live settings object, where the fork's
+ *    retries read Pi's retry settings.
  *
  * 2. ExtensionRunner.prototype.emitBeforeProviderRequest. Every ordinary
  *    request passes through it on its way to the provider, after all the
@@ -61,9 +61,7 @@ export interface Capture {
 /** Pi's SettingsManager, as far as pi-cc-compaction uses it. */
 export interface SettingsLike {
 	getCompactionSettings(model?: unknown): { enabled: boolean; reserveTokens: number; keepRecentTokens: number };
-	getCacheWarmingMode?(): string;
-	setCacheWarmingMode?(mode: string | undefined): void;
-	flush?(): Promise<void>;
+	getRetrySettings?(): { enabled?: boolean; maxRetries?: number; baseDelayMs?: number };
 }
 
 export type CompactionOverride = (

@@ -105,7 +105,7 @@ function notify(ctx: Ctx, message: string, level: "info" | "warning" | "error"):
 
 /** Pi's retry settings (retry.enabled, maxRetries, baseDelayMs), from its live settings object when known. */
 function piRetryPolicy(): RetryPolicy {
-	const settings = (runtime().settings as { getRetrySettings?: () => { enabled?: boolean; maxRetries?: number; baseDelayMs?: number } } | undefined)?.getRetrySettings?.();
+	const settings = runtime().settings?.getRetrySettings?.();
 	return {
 		maxRetries: settings?.enabled === false ? 0 : (settings?.maxRetries ?? 3),
 		baseDelayMs: settings?.baseDelayMs ?? 2000,
