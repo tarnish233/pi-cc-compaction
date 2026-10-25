@@ -35,7 +35,7 @@ import type { PiCcConfig } from "./config.ts";
 import { buildForkPayload, forkWithRetry, type RetryPolicy } from "./fork.ts";
 import { runtime } from "./patches.ts";
 import { forkPlan } from "./plan.ts";
-import { summaryMessage, summaryRequest } from "./prompt.ts";
+import { CONTINUATION_OPENER, summaryMessage, summaryRequest } from "./prompt.ts";
 import { recentFiles, restoreBlocks } from "./restore.ts";
 
 /** Claude Code's messages. */
@@ -123,31 +123,32 @@ function fail(ctx: Ctx, sessionId: string, reason: string, message: string): Ses
 	return { cancel: true };
 }
 
-const TOOLS_TAG = /<tools-used-before-summary>([^<]*)<\/tools-used-before-summary>/;
+/** An earlier summary's tool list, where the summary message puts it: right after the opener. */
+const CARRIED_TOOLS = new RegExp(
+	`^${CONTINUATION_OPENER.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\n\\n<tools-used-before-summary>([^<]*)</tools-used-before-summary>`,
+);
+/** The names Claude Code keeps: 1-256 characters, no angle brackets, commas, control characters or double spaces. */
+const TOOL_NAME = /^(?!.*\s{2})[^<>,\p{C}\u2028\u2029]{1,256}$/u;
 
-function textOf(message: MessageLike): string {
-	if (typeof message.summary === "string") return message.summary;
-	if (typeof message.content === "string") return message.content;
-	if (!Array.isArray(message.content)) return "";
-	return (message.content as Array<{ type?: string; text?: string }>)
-		.filter((block) => block?.type === "text" && typeof block.text === "string")
-		.map((block) => block.text)
-		.join("\n");
-}
-
-/** Tools the conversation called, including those an earlier summary listed (Claude Code carries them over). */
+/**
+ * Tools the conversation called, and those an earlier summary listed, as
+ * Claude Code collects them: a tag anywhere else (a message, a tool result
+ * showing this code, a summary's body) lists nothing.
+ */
 function toolNamesOf(messages: MessageLike[]): string[] {
 	const names = new Set<string>();
 	for (const message of messages) {
 		if (message.role === "assistant" && Array.isArray(message.content)) {
 			for (const block of message.content as Array<{ type?: string; name?: string }>) {
-				if (block?.type === "toolCall" && typeof block.name === "string" && block.name.trim()) names.add(block.name.trim());
+				if (block?.type === "toolCall" && typeof block.name === "string") names.add(block.name.trim());
 			}
 		}
-		const listed = TOOLS_TAG.exec(textOf(message))?.[1];
-		if (listed) for (const name of listed.split(",")) if (name.trim()) names.add(name.trim());
+		if (message.role === "compactionSummary" && typeof message.summary === "string") {
+			const listed = CARRIED_TOOLS.exec(message.summary)?.[1];
+			if (listed) for (const name of listed.split(",")) names.add(name.trim());
+		}
 	}
-	return [...names].sort();
+	return [...names].filter((name) => TOOL_NAME.test(name)).sort();
 }
 
 /**

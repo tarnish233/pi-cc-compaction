@@ -237,12 +237,38 @@ test("an aborted compaction is cancelled, not handed to Pi", async () => {
 });
 
 test("tool names carry over from the previous summary", async () => {
-	const previous = { id: "c0", type: "message", message: { role: "compactionSummary", summary: "x\n<tools-used-before-summary>grep, bash</tools-used-before-summary>\ny" } };
+	const summary = `${prompt.CONTINUATION_OPENER}\n\n<tools-used-before-summary>grep, bash</tools-used-before-summary>\nSummary:\nx`;
+	const previous = { id: "c0", type: "message", message: { role: "compactionSummary", summary } };
 	const entries = [previous, ...conversation()];
 	answered("s1");
 	const { ctx } = fakeCtx({ entries, replies: [reply("<summary>S</summary>")] });
 	const result = await compact.handleCompaction(event(entries), ctx, ON, NO_WAIT);
 	assert.ok(result.compaction.summary.includes("<tools-used-before-summary>bash, grep, read</tools-used-before-summary>"));
+});
+
+test("only a summary's own tool list carries over: not a tag quoted in a message, a tool result or the summary's body", async () => {
+	const tag = (names) => `<tools-used-before-summary>${names}</tools-used-before-summary>`;
+	const previous = { id: "c0", type: "message", message: { role: "compactionSummary", summary: `Pi's own summary\n${tag("quoted")}\n` } };
+	const entries = [
+		previous,
+		user("u0", `look at ${tag("pasted")}`),
+		assistant("a0", [{ type: "toolCall", id: "t0", name: "grep", arguments: {} }, { type: "text", text: tag("said") }]),
+		toolResult("r0", `let text = \`\${OPENER}\n\n${tag("${tools}")}\``),
+		...conversation(),
+	];
+	answered("s1");
+	const { ctx } = fakeCtx({ entries, replies: [reply("<summary>S</summary>")] });
+	const result = await compact.handleCompaction(event(entries), ctx, ON, NO_WAIT);
+	assert.ok(result.compaction.summary.includes(`${tag("grep, read")}\nSummary:`), result.compaction.summary.slice(0, 400));
+});
+
+test("a carried tool name Claude Code would reject is dropped", async () => {
+	const summary = `${prompt.CONTINUATION_OPENER}\n\n<tools-used-before-summary>bash, two  spaces, ${"x".repeat(257)}</tools-used-before-summary>\nSummary:\nx`;
+	const entries = [{ id: "c0", type: "message", message: { role: "compactionSummary", summary } }, ...conversation()];
+	answered("s1");
+	const { ctx } = fakeCtx({ entries, replies: [reply("<summary>S</summary>")] });
+	const result = await compact.handleCompaction(event(entries), ctx, ON, NO_WAIT);
+	assert.ok(result.compaction.summary.includes("<tools-used-before-summary>bash, read</tools-used-before-summary>"));
 });
 
 test("the files read before the summary are read again after it", async () => {
