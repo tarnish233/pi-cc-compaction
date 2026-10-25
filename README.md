@@ -24,7 +24,7 @@ ln -sfn "$PWD" ~/.pi/agent/extensions/pi-cc-compaction
 | Claude Code 的阈值 | 自动压缩在 `窗口 − min(最大输出, 20K) − 13K` 触发（多数模型约 `窗口 − 33K`）；任何有两轮以上的会话都能 `/compact` | `patches.ts` |
 | Claude Code 的失败处理 | 失败就取消并给出 Claude Code 的提示，不换算法；自动压缩有失败熔断和抖动熔断 | `compact.ts`、`breaker.ts` |
 | Claude Code 的提示词 | 九段式摘要（先 `<analysis>` 再 `<summary>`），`/compact <指令>` 作为 Additional Instructions；摘要带 Claude Code 的续接说明 | `prompt.ts` |
-| 压缩后补回文件 | 重读最近读写过的 5 个文件（每个 ≤5K token，合计 ≤50K），太大的只留一句提示 | `restore.ts` |
+| 压缩后补回文件 | 重读最近读写过的 5 个文件（每个 ≤5K token，合计 ≤50K），codemode 脚本里读的也算；太大的只留一句提示 | `restore.ts` |
 | 空闲压缩 | 缓存有效期 ≥1 小时的模型，闲置到有效期的 75%（1 小时缓存即 45 分钟）且上下文 ≥10 万 token 时先压缩 | `idle.ts` |
 | 压缩提示 | 每次压缩后说明是本包还是 Pi 压缩的，交给 Pi 时写明原因 | `compact.ts` |
 
@@ -144,7 +144,7 @@ npx --yes -p typescript@5.9.3 tsc --noEmit -p tsconfig.json
 
 - 熔断打开后，本会话的自动压缩和 Pi 的超限恢复一起停（返回 `enabled:false`）。Claude Code 的失败熔断只拦主动压缩，超限时仍尝试恢复；这里没有等效的手段只拦其一
 
-- 提示词：Claude Code 从 8 个实验分支里选摘要提示词（服务端开关），这里固定用默认的 control 分支；工具列表换成 Pi 的小写工具名
+- 提示词：Claude Code 从 8 个实验分支里选摘要提示词（服务端开关），这里固定用默认的 control 分支；工具列表换成 Pi 的小写工具名。codemode 脚本里调用的工具按 Pi 记在结果上的 `nestedCalls` 计入（工具列表和补回的文件都是），Claude Code 没有 codemode
 - 补回的内容：Claude Code 还会补回 plan、已加载的技能、后台任务状态，Pi 没有对应的东西；补回的文件作为摘要正文的一部分（Pi 压缩后没有附件位置），措辞相同
 - 超限恢复：Claude Code 按 API 返回的 token 缺口逐组多保留尾部，最后裁掉最早的历史；这里从超限前最后一次成功的请求分叉，那次请求必然放得下，不需要逐组退让和裁头
 - 读不到缓存时：Claude Code 照样分叉（或退到它的专用摘要请求）；这里交给 Pi 自己的压缩

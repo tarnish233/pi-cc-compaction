@@ -62,6 +62,8 @@ interface MessageLike {
 	role?: string;
 	content?: unknown;
 	summary?: unknown;
+	/** Calls a tool made while it ran (a codemode script's), as Pi records them on the tool result. */
+	nestedCalls?: { calls?: Array<{ name?: string }> };
 }
 
 export interface CompactEventLike {
@@ -162,10 +164,16 @@ const TOOL_NAME = /^(?!.*\s{2})[^<>,\p{C}\u2028\u2029]{1,256}$/u;
  */
 function toolNamesOf(messages: MessageLike[]): string[] {
 	const names = new Set<string>();
+	const add = (name: unknown) => {
+		if (typeof name === "string") names.add(name.trim());
+	};
 	for (const message of messages) {
+		// A script's calls are listed too: the model called codemode, the script
+		// called the rest, and the summary should name what the conversation used.
+		for (const call of message.nestedCalls?.calls ?? []) add(call.name);
 		if (message.role === "assistant" && Array.isArray(message.content)) {
 			for (const block of message.content as Array<{ type?: string; name?: string }>) {
-				if (block?.type === "toolCall" && typeof block.name === "string") names.add(block.name.trim());
+				if (block?.type === "toolCall") add(block.name);
 			}
 		}
 		if (message.role === "compactionSummary" && typeof message.summary === "string") {

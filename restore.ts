@@ -27,19 +27,35 @@ interface ToolCallBlock {
 	arguments?: Record<string, unknown>;
 }
 
+/** A call a tool made while it ran (a codemode script's), as Pi records it on the tool result. */
+interface NestedCall {
+	name?: string;
+	/** Omitted when the call's arguments were too large to record. */
+	arguments?: Record<string, unknown>;
+}
+
 interface MessageLike {
 	role?: string;
 	content?: unknown;
+	nestedCalls?: { calls?: NestedCall[] };
+}
+
+function pushPath(paths: string[], toolName: string | undefined, args: Record<string, unknown> | undefined, cwd: string): void {
+	if (!FILE_TOOLS.has(toolName ?? "")) return;
+	const target = args?.path;
+	if (typeof target === "string" && target !== "") paths.push(path.resolve(cwd, target));
 }
 
 function filePathsOf(messages: readonly MessageLike[], cwd: string): string[] {
 	const paths: string[] = [];
 	for (const message of messages) {
+		// Calls a script made are recorded on its tool result; Pi's own
+		// compaction reads them the same way.
+		for (const call of message.nestedCalls?.calls ?? []) pushPath(paths, call.name, call.arguments, cwd);
 		if (message.role !== "assistant" || !Array.isArray(message.content)) continue;
 		for (const block of message.content as ToolCallBlock[]) {
-			if (block?.type !== "toolCall" || !FILE_TOOLS.has(block.name ?? "")) continue;
-			const target = block.arguments?.path;
-			if (typeof target === "string" && target !== "") paths.push(path.resolve(cwd, target));
+			if (block?.type !== "toolCall") continue;
+			pushPath(paths, block.name, block.arguments, cwd);
 		}
 	}
 	return paths;

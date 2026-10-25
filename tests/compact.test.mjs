@@ -318,3 +318,38 @@ test("the files read before the summary are read again after it", async () => {
 	assert.ok(result.compaction.summary.endsWith(`Result of calling the read tool:\nconst bug = 0;\n`));
 	assert.deepEqual(result.compaction.details.restoredFiles, [path.join(dir, "bug.ts")]);
 });
+
+test("tools a codemode script called are listed in the summary, and its files re-read", async () => {
+	const dir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-cc-compaction-script-"));
+	fs.writeFileSync(path.join(dir, "bug.ts"), "const bug = 0;\n");
+	// The model called codemode; the script read a file and ran grep. Pi records
+	// those calls on the script's result, not as tool calls of their own.
+	const entries = [
+		user("u1", "fix the bug"),
+		assistant("a1", [{ type: "toolCall", id: "t", name: "codemode", arguments: { code: "await tools.read({ path: 'bug.ts' })" } }]),
+		{
+			id: "r1",
+			type: "message",
+			message: {
+				role: "toolResult",
+				toolCallId: "t",
+				toolName: "codemode",
+				content: [{ type: "text", text: "Script completed\nWall time 0.1 seconds\nOutput:\n" }],
+				nestedCalls: {
+					calls: [
+						{ id: "t/1", name: "read", arguments: { path: "bug.ts" }, status: "ok" },
+						{ id: "t/2", name: "grep", arguments: { pattern: "bug" }, status: "ok" },
+					],
+					complete: true,
+				},
+				isError: false,
+			},
+		},
+		assistant("a2", [{ type: "text", text: "Fixed." }], "stop"),
+	];
+	answered("s1");
+	const { ctx } = fakeCtx({ entries, cwd: dir, replies: [reply("<summary>S</summary>")] });
+	const result = await compact.handleCompaction(event(entries), ctx, ON, NO_WAIT);
+	assert.ok(result.compaction.summary.includes("<tools-used-before-summary>codemode, grep, read</tools-used-before-summary>"), result.compaction.summary.slice(0, 300));
+	assert.deepEqual(result.compaction.details.restoredFiles, [path.join(dir, "bug.ts")]);
+});

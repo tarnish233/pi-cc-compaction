@@ -64,3 +64,37 @@ test("a file over 5K tokens gets Claude Code's note instead; the total stays wit
 	assert.equal(small.length, 3);
 	assert.equal(restore.restoreBlocks(["a.ts", "b.ts", "c.ts", "d.ts"].map((name) => path.join(dir, name))).length, 4);
 });
+
+test("a file a codemode script read counts too: its calls are recorded on the tool result", () => {
+	const dir = workspace({ "script.ts": "S", "from-call.ts": "C", "kept.ts": "K" });
+	// One script call read two files; a later one read a third. A tool result
+	// carries the calls the tool made (name, arguments), as Pi records them.
+	const script = (...calls) => ({
+		role: "toolResult",
+		content: [{ type: "text", text: "Script completed" }],
+		nestedCalls: { calls: calls.map((path) => ({ id: `t/${path}`, name: "read", arguments: { path }, status: "ok" })), complete: true },
+	});
+	const summarized = [call("bash", { command: "true" }), script("script.ts", "from-call.ts")];
+	const kept = [script("kept.ts")];
+	assert.deepEqual(restore.recentFiles([...summarized, ...kept], kept, dir), [path.join(dir, "from-call.ts"), path.join(dir, "script.ts")]);
+});
+
+test("a script's file args that were dropped for size, or a tool that is not a file tool, are skipped", () => {
+	const dir = workspace({ "a.ts": "A", "b.ts": "B" });
+	const messages = [
+		{
+			role: "toolResult",
+			content: [],
+			nestedCalls: {
+				calls: [
+					{ id: "t/1", name: "read", arguments: { path: "a.ts" }, status: "ok" },
+					{ id: "t/2", name: "read", argumentsBytes: 9000, status: "ok" },
+					{ id: "t/3", name: "grep", arguments: { path: "b.ts" }, status: "ok" },
+					{ id: "t/4", name: "edit", arguments: { path: "b.ts" }, status: "ok" },
+				],
+				complete: false,
+			},
+		},
+	];
+	assert.deepEqual(restore.recentFiles(messages, [], dir), [path.join(dir, "b.ts"), path.join(dir, "a.ts")]);
+});
