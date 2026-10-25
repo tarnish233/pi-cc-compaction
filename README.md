@@ -49,7 +49,7 @@ Claude Code 则在原会话上分叉：system prompt、工具、消息、思考�
 | --- | --- |
 | 本会话还没有成功的请求 | 刚启动或恢复会话，还没发过请求 |
 | 上次请求用的是别的模型或 provider | 缓存按模型、按 provider 分开 |
-| 缓存已过期 | 模型配了 `promptCache`，且距上次请求已超过有效期；没配的无从判断，照常分叉 |
+| 缓存已过期 | 距上次请求已超过缓存有效期（有效期怎么定见[空闲压缩](#空闲压缩)）；有效期未知的无从判断，照常分叉 |
 | 三种 API 以外的 provider | 无法在请求末尾追加一轮 |
 
 这个判断在 Pi 读取压缩设置时就做出：能分叉才把 `keepRecentTokens` 设为 1；不能分叉就保持 Pi 原值，Pi 按它自己的设置决定保留什么、要不要压缩。
@@ -66,22 +66,31 @@ Claude Code 则在原会话上分叉：system prompt、工具、消息、思考�
 
 压缩读的是缓存前缀，缓存热时很便宜；缓存一过期，下一次请求就要为整段对话重新付费。所以闲置太久时，趁缓存还热先压掉。
 
-- 缓存有效期取模型的 `promptCache`（Pi 的模型配置字段，Pi 的缓存保温也读它）：`PI_CACHE_RETENTION=long` 用 `long` 档，否则用 `short` 档。和 Pi 发请求时的判断一致：先看 provider 自己的环境变量（`auth.json` 里该 provider 的 `env`），再看进程环境变量
 - **有效期 ≥1 小时才启用**，和 Claude Code 一致；5 分钟缓存不做，否则每次稍微离开都会压缩
 - 一轮结束后开始计时，在“上次请求 + 90% 有效期”时触发；触发时再确认：仍然空闲、没有排队消息、没有更新的请求、上下文 ≥20 万 token（`PI_CC_IDLE_COMPACT_MIN_TOKENS` 可调，最低 10 万）、没有迟到超过 1 分钟
-- 默认开启；没有配 `promptCache`（或不到 1 小时）的模型不会触发
+- 默认开启（`/pi_cc` 可关）
 
-给模型配有效期，以 `~/.pi/agent/models.json` 里的自定义模型为例：
+有效期看上一次请求本身要的缓存，按顺序：
 
-```json
-{ "id": "claude-opus-5-5", "promptCache": { "short": 300, "long": 3600 } }
-```
+1. **模型配了 `promptCache`**：用它。档位看请求：请求里带了长缓存参数（Anthropic 的 `ttl: "1h"`、OpenAI 的 `prompt_cache_retention` 等，Pi 在 `PI_CACHE_RETENTION=long` 时才带）用 `long`，否则用 `short`
+2. **没配，但请求是 Anthropic 格式且要了 1 小时缓存**（`cache_control.ttl: "1h"`）：就是 1 小时，这是 API 定义的，不用配
+3. 其他：有效期未知，不做空闲压缩
 
-内置模型用 `modelOverrides` 配。Anthropic 的长缓存需要 `PI_CACHE_RETENTION=long`，可以只给某个 provider 设：
+所以：
 
-```json
-{ "cloudagent": { "type": "api_key", "key": "…", "env": { "PI_CACHE_RETENTION": "long" } } }
-```
+- **Anthropic 系**（含 Anthropic 格式的代理）：只要让 Pi 发 1 小时缓存，即给该 provider 设 `PI_CACHE_RETENTION=long`，别的不用配。可以只给某个 provider 设，写在 `~/.pi/agent/auth.json` 里它的条目下：
+
+  ```json
+  { "cloudagent": { "type": "api_key", "key": "…", "env": { "PI_CACHE_RETENTION": "long" } } }
+  ```
+
+- **OpenAI 系**（`openai-responses`、`openai-completions`）：`prompt_cache_retention` 实际保留多久由各家决定（OpenAI 官方的 `24h` 档文档写“通常约 30 分钟”），不作推断。确认服务端能保留 1 小时以上的，在 `~/.pi/agent/models.json` 给模型配 `promptCache`，两档写同一个数即可，不用管用的是哪档：
+
+  ```json
+  { "id": "my-model", "promptCache": { "short": 3600, "long": 3600 } }
+  ```
+
+  内置模型用 `modelOverrides` 配。
 
 ### 与 Pi 缓存保温的关系
 

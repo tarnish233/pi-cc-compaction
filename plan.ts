@@ -8,10 +8,10 @@
  *  - that request went to the current model on the current provider (a cache
  *    belongs to one model, served by one provider);
  *  - the current model speaks one of the forkable APIs;
- *  - its cache has not expired, as far as can be known: the model's
- *    promptCache lifetime (see idle.ts), counted from that request. A model
- *    without promptCache cannot be known to have lost it; Claude Code forks
- *    without asking, so this does too.
+ *  - its cache has not expired, as far as can be known: the lifetime that
+ *    request asked for (idle.ts: the model's promptCache, or Anthropic's
+ *    hour), counted from that request. A cache of unknown lifetime cannot be
+ *    known to be gone; Claude Code forks without asking, so this does too.
  * Otherwise no cache can be read whatever is sent, and Pi's own compaction
  * runs, with Pi's own settings: the decision is made where Pi reads its
  * compaction settings, before it chooses what to keep (index.ts), and again

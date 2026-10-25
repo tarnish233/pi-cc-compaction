@@ -24,7 +24,7 @@ import { ExtensionRunner, SettingsManager, type ExtensionAPI, type ExtensionCont
 import * as breaker from "./breaker.ts";
 import { handleCompaction } from "./compact.ts";
 import { invalidateConfig, loadConfig } from "./config.ts";
-import { IdleCompactor, cacheRetentionTier, ttlForTier } from "./idle.ts";
+import { IdleCompactor, requestTtlMs } from "./idle.ts";
 import { ccReserveTokens, commitPending, forgetSession, installPatches, runtime } from "./patches.ts";
 import { forkPlan } from "./plan.ts";
 import { CONFIG_CHANNEL, registerPiCcCommand } from "./settings.ts";
@@ -64,7 +64,7 @@ export default function piCcCompact(pi: ExtensionAPI): void {
 		rt.activeSessionId = ctx.sessionManager.getSessionId();
 		// A reload at idle ends no run, so no agent_settled will come to arm
 		// the idle compaction: the continuing session's start re-arms it.
-		if (event.reason === "reload") void idle.arm(ctx, loadConfig());
+		if (event.reason === "reload") idle.arm(ctx, loadConfig());
 		if (missing.length > 0 && !toldMissing) {
 			toldMissing = true;
 			notify(ctx, `pi-cc-compaction: this Pi has no ${missing.join(" or ")}; compaction and its thresholds fall back to Pi's own`, "warning");
@@ -82,27 +82,22 @@ export default function piCcCompact(pi: ExtensionAPI): void {
 		return handleCompaction(event, ctx, loadConfig());
 	});
 
-	pi.on("agent_settled", async (_event, ctx) => {
-		await idle.arm(ctx, loadConfig());
+	pi.on("agent_settled", (_event, ctx) => {
+		idle.arm(ctx, loadConfig());
 	});
 
 	// A reply arrived: the request it answers wrote the cache and becomes the
 	// one to fork. An error reply (an overflow, say) wrote nothing: the last
-	// success stays. The cache lifetime is looked up after, off the turn's path.
+	// success stays. Its cache lives as long as the request asked (idle.ts).
 	pi.on("turn_end", (event, ctx) => {
 		const sessionId = ctx.sessionManager.getSessionId();
 		breaker.noteTurn(sessionId);
 		const stop = (event.message as { stopReason?: string } | undefined)?.stopReason;
 		const model = ctx.model as { provider?: string; id?: string } | undefined;
 		const modelKey = model ? `${model.provider}/${model.id}` : undefined;
-		if ((stop === "stop" || stop === "toolUse" || stop === "length") && commitPending(sessionId, { modelKey })) {
-			const committed = rt.captures.get(sessionId);
-			void cacheRetentionTier(ctx)
-				.then((tier) => {
-					const ttlMs = ttlForTier(ctx.model as never, tier);
-					if (committed && rt.captures.get(sessionId) === committed && ttlMs !== undefined) committed.ttlMs = ttlMs;
-				})
-				.catch(() => {});
+		if (stop === "stop" || stop === "toolUse" || stop === "length") {
+			const pending = rt.pending.get(sessionId);
+			commitPending(sessionId, { modelKey, ttlMs: pending && requestTtlMs(pending.payload, ctx.model) });
 		}
 		return undefined;
 	});

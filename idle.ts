@@ -10,12 +10,13 @@
  * one-hour caches: on a five-minute cache that would compact every short
  * break.
  *
- * The lifetime is the model's promptCache entry for the retention Pi uses,
- * the same number Pi's cache warmer reads. The retention is decided as Pi
- * decides it for each request: PI_CACHE_RETENTION from the provider's own
- * environment (the env of its auth.json entry) first, then from the
- * process; "long" picks the long tier, anything else the short one. Without one of an hour or more, nothing
- * happens. The timer starts when a run settles and counts from the last
+ * The lifetime is the one the request to fork asked for, decided when its
+ * reply arrives (requestTtlMs): the model's promptCache for the tier the
+ * request used (a long-retention marker in it means the long tier), or else
+ * the hour of an Anthropic request that asked for one (cache_control ttl
+ * "1h", which Pi sends with PI_CACHE_RETENTION=long), a lifetime the API
+ * defines. Anything else is unknown. Without a lifetime of an hour or more,
+ * nothing happens. The timer starts when a run settles and counts from the last
  * request; when it fires the conditions are checked again: still idle,
  * nothing queued, no newer request, at least 200K tokens of context (Claude
  * Code's default; PI_CC_IDLE_COMPACT_MIN_TOKENS changes it, not below 100K),
@@ -42,31 +43,40 @@ type Tier = "long" | "short";
 type PromptCacheModel = { promptCache?: { short?: number; long?: number } } | undefined;
 
 /** A model's prompt cache lifetime for a retention tier, in ms; undefined when the model declares none. */
-export function ttlForTier(model: PromptCacheModel, tier: Tier): number | undefined {
+function ttlForTier(model: PromptCacheModel, tier: Tier): number | undefined {
 	const seconds = model?.promptCache?.[tier];
 	return typeof seconds === "number" && seconds > 0 ? seconds * 1000 : undefined;
 }
 
-/** What idle compaction asks of the model registry: the provider's own environment. */
-interface RegistryLike {
-	getApiKeyAndHeaders?(model: never): Promise<{ ok: boolean; env?: Record<string, string> }>;
+/** Anthropic's long cache: cache_control { ttl: "1h" } lives an hour. */
+const ANTHROPIC_HOUR_MS = 3600_000;
+
+type Marked = { cache_control?: { ttl?: unknown } } | null | undefined;
+const asksForHour = (block: unknown): boolean => (block as Marked)?.cache_control?.ttl === "1h";
+const anyAsksForHour = (blocks: unknown): boolean => Array.isArray(blocks) && blocks.some(asksForHour);
+
+/** Whether an Anthropic-format request asked for an hour: Pi marks the system prompt, the last tool and the last message alike. */
+function hourMarked(payload: Record<string, unknown>): boolean {
+	if (anyAsksForHour(payload.system) || anyAsksForHour(payload.tools)) return true;
+	const messages = payload.messages;
+	return Array.isArray(messages) && messages.some((message) => anyAsksForHour((message as { content?: unknown } | null)?.content));
 }
 
 /**
- * The retention tier of this model's requests, decided as Pi decides it
- * (getProviderEnvValue): the provider's PI_CACHE_RETENTION, then the
- * process's. Without the provider's environment (no auth, a failed lookup),
- * the process decides.
+ * How long the cache a request writes lives, in ms: the model's promptCache
+ * for the tier the request asked for (long when it carries a long-retention
+ * marker: Anthropic's ttl "1h", OpenAI's prompt_cache_retention or
+ * prompt_cache_options ttl), or else an hour when an Anthropic-format request
+ * asked for one. Undefined when unknown: what OpenAI-style retention values
+ * mean is up to each provider, so they count only when declared.
  */
-export async function cacheRetentionTier(ctx: { model?: unknown; modelRegistry?: RegistryLike }, env: Env = process.env): Promise<Tier> {
-	let providerEnv: Record<string, string> | undefined;
-	try {
-		const auth = await ctx.modelRegistry?.getApiKeyAndHeaders?.(ctx.model as never);
-		if (auth?.ok) providerEnv = auth.env;
-	} catch {
-		// the process environment decides
-	}
-	return (providerEnv?.PI_CACHE_RETENTION || env.PI_CACHE_RETENTION) === "long" ? "long" : "short";
+export function requestTtlMs(payload: unknown, model: unknown): number | undefined {
+	if (typeof payload !== "object" || payload === null) return undefined;
+	const request = payload as Record<string, unknown>;
+	const hour = hourMarked(request);
+	const options = request.prompt_cache_options as { ttl?: unknown } | null | undefined;
+	const long = hour || request.prompt_cache_retention === "24h" || options?.ttl !== undefined;
+	return ttlForTier(model as PromptCacheModel, long ? "long" : "short") ?? (hour ? ANTHROPIC_HOUR_MS : undefined);
 }
 
 /** 90% of the lifetime, with ten seconds of margin at least: when Claude Code and Pi's warmer act. */
@@ -81,7 +91,6 @@ export function idleMinTokens(env: Env = process.env): number {
 
 /** The parts of the extension context idle compaction uses. */
 export interface IdleContext {
-	model?: unknown;
 	hasUI?: boolean;
 	ui?: { notify(message: string, level: "info" | "warning" | "error"): void };
 	isIdle(): boolean;
@@ -89,7 +98,6 @@ export interface IdleContext {
 	getContextUsage(): { tokens: number | null } | undefined;
 	sessionManager: { getSessionId(): string };
 	compact(options?: { onComplete?: (result: unknown) => void; onError?: (error: Error) => void }): void;
-	modelRegistry?: RegistryLike;
 }
 
 export interface IdleDeps {
@@ -99,7 +107,6 @@ export interface IdleDeps {
 	clearTimer?: (timer: unknown) => void;
 }
 
-
 /** A failure compact.ts has already shown, as it shows a failed manual /compact ("Compaction failed: …", "Compaction cancelled"). */
 function isReportedCompactionError(error: Error): boolean {
 	const message = error.message ?? "";
@@ -108,8 +115,6 @@ function isReportedCompactionError(error: Error): boolean {
 
 export class IdleCompactor {
 	private timer: unknown;
-	/** Bumped by every cancel and arm, so an arm still looking up its provider knows it was superseded. */
-	private generation = 0;
 	private readonly now: () => number;
 	private readonly env: Env;
 	private readonly setTimer: (fn: () => void, ms: number) => unknown;
@@ -129,30 +134,25 @@ export class IdleCompactor {
 	}
 
 	cancel(): void {
-		this.generation++;
 		if (this.timer !== undefined) this.clearTimer(this.timer);
 		this.timer = undefined;
 	}
 
 	/** When the run that just settled warrants it, schedule the idle compaction. */
-	async arm(ctx: IdleContext, config: Pick<PiCcConfig, "compaction" | "idleCompaction">): Promise<void> {
+	arm(ctx: IdleContext, config: Pick<PiCcConfig, "compaction" | "idleCompaction">): void {
 		this.cancel();
-		const generation = this.generation;
 		if (!config.compaction || !config.idleCompaction) return;
-		const tier = await cacheRetentionTier(ctx, this.env);
-		if (generation !== this.generation) return; // cancelled or re-armed meanwhile
-		const plan = this.plan(ctx, tier);
+		const plan = this.plan(ctx);
 		if (!plan) return;
 		this.timer = this.setTimer(() => this.fire(ctx, config, plan), Math.max(0, plan.due - this.now()));
 	}
 
-	private plan(ctx: IdleContext, tier: Tier): { due: number; requestAt: number } | undefined {
-		const ttl = ttlForTier(ctx.model as never, tier);
-		if (ttl === undefined || ttl < IDLE_MIN_TTL_MS) return undefined;
-		if (!this.ready(ctx)) return undefined;
+	/** Due at 90% of the lifetime of the last answered request's cache, when that is an hour or more. */
+	private plan(ctx: IdleContext): { due: number; requestAt: number } | undefined {
 		const capture = runtime().captures.get(ctx.sessionManager.getSessionId());
-		if (!capture) return undefined;
-		return { due: capture.at + idleDelayMs(ttl), requestAt: capture.at };
+		if (capture?.ttlMs === undefined || capture.ttlMs < IDLE_MIN_TTL_MS) return undefined;
+		if (!this.ready(ctx)) return undefined;
+		return { due: capture.at + idleDelayMs(capture.ttlMs), requestAt: capture.at };
 	}
 
 	private ready(ctx: IdleContext): boolean {

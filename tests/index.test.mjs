@@ -102,6 +102,22 @@ test("a turn that got its reply makes its request the one to fork; a failed turn
 	assert.equal(rt.captures.has("index-s"), false, "compacted: the next request starts a new prefix");
 });
 
+test("the request that becomes the one to fork carries its cache lifetime, as the request asked for it", async () => {
+	const rt = patches.runtime();
+	const hour = { type: "ephemeral", ttl: "1h" };
+	const cases = [
+		["Anthropic's hour, nothing declared", { model: "m", system: [{ type: "text", text: "S", cache_control: hour }], messages: [] }, { provider: "p", id: "m" }, 3600_000],
+		["the declared long tier", { model: "m", input: [], prompt_cache_retention: "24h" }, { provider: "p", id: "m", promptCache: { short: 300, long: 7200 } }, 7200_000],
+		["unknown", { model: "m", input: [] }, { provider: "p", id: "m" }, undefined],
+	];
+	for (const [label, payload, model, ttlMs] of cases) {
+		patches.forgetSession("index-s");
+		rt.pending.set("index-s", { payload, leafId: "l1", at: Date.now() });
+		await host.emit("turn_end", { message: { role: "assistant", stopReason: "stop" }, toolResults: [] }, { ...ctx(), model });
+		assert.equal(rt.captures.get("index-s").ttlMs, ttlMs, label);
+	}
+	patches.forgetSession("index-s");
+});
 
 test("with compaction off, a compaction is left to Pi", async () => {
 	process.env.PI_CC_COMPACTION = "0";
@@ -134,11 +150,11 @@ test("a reload ends the extension, not the session: the capture and the breaker 
 });
 
 test("a reload re-arms the idle compaction: no run will settle to do it", async () => {
-	patches.runtime().captures.set("index-s", { payload: { messages: [] }, leafId: null, at: Date.now() });
+	patches.runtime().captures.set("index-s", { payload: { messages: [] }, leafId: null, at: Date.now(), ttlMs: 7200_000 });
 	const idleChecks = [];
 	const idleCtx = {
 		...ctx(),
-		model: { id: "m", promptCache: { short: 7200, long: 7200 } },
+		model: { id: "m" },
 		isIdle: () => (idleChecks.push(1), true),
 		hasPendingMessages: () => false,
 		getContextUsage: () => ({ tokens: 250000 }),
