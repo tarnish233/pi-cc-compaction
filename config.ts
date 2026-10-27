@@ -99,6 +99,11 @@ export function configPath(): string {
 	return path.join(getAgentDir(), "pi-cc.json");
 }
 
+/** One setting: an environment override, else the file's boolean, else the default. */
+function readSetting(file: Partial<PiCcConfig>, key: keyof PiCcConfig): boolean {
+	return envBool(ENV_OVERRIDES[key]) ?? (typeof file[key] === "boolean" ? (file[key] as boolean) : DEFAULT_CONFIG[key]);
+}
+
 function readConfig(): PiCcConfig {
 	let file: Partial<PiCcConfig> = {};
 	try {
@@ -107,24 +112,11 @@ function readConfig(): PiCcConfig {
 	} catch {
 		// Missing or malformed files fall back to defaults.
 	}
-	return {
-		compactMessages:
-			envBool(ENV_OVERRIDES.compactMessages) ??
-			(typeof file.compactMessages === "boolean" ? file.compactMessages : DEFAULT_CONFIG.compactMessages),
-		footer:
-			envBool(ENV_OVERRIDES.footer) ?? (typeof file.footer === "boolean" ? file.footer : DEFAULT_CONFIG.footer),
-		draft: envBool(ENV_OVERRIDES.draft) ?? (typeof file.draft === "boolean" ? file.draft : DEFAULT_CONFIG.draft),
-		turnSummary:
-			envBool(ENV_OVERRIDES.turnSummary) ??
-			(typeof file.turnSummary === "boolean" ? file.turnSummary : DEFAULT_CONFIG.turnSummary),
-		ccKeys: envBool(ENV_OVERRIDES.ccKeys) ?? (typeof file.ccKeys === "boolean" ? file.ccKeys : DEFAULT_CONFIG.ccKeys),
-		compaction:
-			envBool(ENV_OVERRIDES.compaction) ??
-			(typeof file.compaction === "boolean" ? file.compaction : DEFAULT_CONFIG.compaction),
-		idleCompaction:
-			envBool(ENV_OVERRIDES.idleCompaction) ??
-			(typeof file.idleCompaction === "boolean" ? file.idleCompaction : DEFAULT_CONFIG.idleCompaction),
-	};
+	// One loop over the defaults, so a setting added to DEFAULT_CONFIG is read
+	// without a second edit here.
+	const config = { ...DEFAULT_CONFIG };
+	for (const key of Object.keys(config) as Array<keyof PiCcConfig>) config[key] = readSetting(file, key);
+	return config;
 }
 
 let cached: PiCcConfig | undefined;
