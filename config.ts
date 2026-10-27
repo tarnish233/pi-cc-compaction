@@ -13,12 +13,13 @@
  *     "footer": true,
  *     "draft": true,
  *     "turnSummary": true,
+ *     "ccKeys": true,
  *     "compaction": true,
  *     "idleCompaction": true
  *   }
  *
- * compactMessages and footer drive loop and monitor; draft and turnSummary
- * drive pi-cc-plugins; compaction and idleCompaction drive pi-cc-compaction. A package that is not installed simply ignores its
+ * compactMessages and footer drive loop and monitor; draft, turnSummary and
+ * ccKeys drive pi-cc-plugins; compaction and idleCompaction drive pi-cc-compaction. A package that is not installed simply ignores its
  * keys, and they are kept as the user left them.
  *
  * Environment overrides (useful for tests and quick experiments) win over the
@@ -28,6 +29,7 @@
  *   PI_CC_FOOTER=0|1
  *   PI_CC_DRAFT=0|1
  *   PI_CC_TURN_SUMMARY=0|1
+ *   PI_CC_KEYS=0|1
  *   PI_CC_COMPACTION=0|1
  *   PI_CC_IDLE_COMPACTION=0|1
  */
@@ -48,6 +50,8 @@ export interface PiCcConfig {
 	draft: boolean;
 	/** pi-cc-plugins: one line closes every agent run. */
 	turnSummary: boolean;
+	/** pi-cc-plugins: Claude Code's Enter queues, Ctrl+Enter sends now. */
+	ccKeys: boolean;
 	/** pi-cc-compaction: Claude Code's compaction replaces Pi's summary request. */
 	compaction: boolean;
 	/** pi-cc-compaction: compact while idle, before a long prompt cache expires. */
@@ -59,6 +63,7 @@ export const DEFAULT_CONFIG: PiCcConfig = {
 	footer: true,
 	draft: true,
 	turnSummary: true,
+	ccKeys: true,
 	compaction: true,
 	idleCompaction: true,
 };
@@ -69,6 +74,7 @@ const ENV_OVERRIDES: Record<keyof PiCcConfig, string> = {
 	footer: "PI_CC_FOOTER",
 	draft: "PI_CC_DRAFT",
 	turnSummary: "PI_CC_TURN_SUMMARY",
+	ccKeys: "PI_CC_KEYS",
 	compaction: "PI_CC_COMPACTION",
 	idleCompaction: "PI_CC_IDLE_COMPACTION",
 };
@@ -111,6 +117,7 @@ function readConfig(): PiCcConfig {
 		turnSummary:
 			envBool(ENV_OVERRIDES.turnSummary) ??
 			(typeof file.turnSummary === "boolean" ? file.turnSummary : DEFAULT_CONFIG.turnSummary),
+		ccKeys: envBool(ENV_OVERRIDES.ccKeys) ?? (typeof file.ccKeys === "boolean" ? file.ccKeys : DEFAULT_CONFIG.ccKeys),
 		compaction:
 			envBool(ENV_OVERRIDES.compaction) ??
 			(typeof file.compaction === "boolean" ? file.compaction : DEFAULT_CONFIG.compaction),

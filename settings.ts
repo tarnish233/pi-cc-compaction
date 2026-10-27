@@ -100,6 +100,14 @@ const PAGES: SettingsPage[] = [
 				off: "off",
 				description: "One line closes every agent run \u2014 tools, duration, done time.",
 			},
+			{
+				field: "ccKeys",
+				label: "CC keys",
+				on: "on",
+				off: "off",
+				description:
+					"Enter queues while Pi works and Ctrl+Enter sends now, as in Claude Code. off: Pi's keys (Enter sends, Alt+Enter queues).",
+			},
 		],
 	},
 	{
@@ -327,6 +335,8 @@ const KEYS: Record<string, { field: keyof PiCcConfig; label: string }> = {
 	draft: { field: "draft", label: "Draft recall" },
 	summary: { field: "turnSummary", label: "Turn summary" },
 	turnsummary: { field: "turnSummary", label: "Turn summary" },
+	keys: { field: "ccKeys", label: "CC keys" },
+	keymap: { field: "ccKeys", label: "CC keys" },
 	compact: { field: "compaction", label: "CC compaction" },
 	compaction: { field: "compaction", label: "CC compaction" },
 	idle: { field: "idleCompaction", label: "Idle compaction" },
@@ -381,7 +391,7 @@ export function registerPiCcCommand(pi: ExtensionAPI, owner: string): void {
 	};
 
 	pi.registerCommand("pi_cc", {
-		description: "pi-cc settings: message style, footer, draft, turn summary, compaction",
+		description: "pi-cc settings: message style, footer, draft, turn summary, CC keys, compaction",
 		handler: async (args: string, ctx: ExtensionCommandContext) => {
 			const words = args.trim().split(/\s+/).filter(Boolean);
 			// "/pi_cc settings footer on" reads like the old /loop settings: drop the noun.
