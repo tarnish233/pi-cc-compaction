@@ -270,27 +270,32 @@ function overrideNote(key: keyof PiCcConfig): string {
 	return override ? ` (${override})` : "";
 }
 
+/**
+ * The word the text summary uses for a setting: the first alias in KEYS. The
+ * panel shows the description label instead.
+ */
+function commandWord(field: keyof PiCcConfig): string {
+	return Object.keys(KEYS).find((word) => KEYS[word].field === field) ?? field;
+}
+
+/**
+ * The summary a non-TUI /pi_cc prints, generated from the same pages the panel
+ * draws: a setting added to PAGES cannot go missing here.
+ */
 function showSettings(ctx: ExtensionContext): void {
 	const config = loadConfig();
-	const lines = [
-		`pi-cc settings \u00b7 ${configPath()}`,
-		PAGES[0].label,
-		`  messages:  ${config.compactMessages ? "compact" : "card"}${overrideNote("compactMessages")}`,
-		`  footer:    ${config.footer ? "summary" : "hidden"}${overrideNote("footer")}`,
-		PAGES[1].label,
-		`  draft:     ${config.draft ? "on" : "off"}${overrideNote("draft")}`,
-		`  summary:   ${config.turnSummary ? "on" : "off"}${overrideNote("turnSummary")}`,
-		PAGES[2].label,
-		`  compact:   ${config.compaction ? "on" : "off"}${overrideNote("compaction")}`,
-		`  idle:      ${config.idleCompaction ? "on" : "off"}${overrideNote("idleCompaction")}`,
+	const lines = [`pi-cc settings \u00b7 ${configPath()}`];
+	for (const page of PAGES) {
+		lines.push(page.label);
+		for (const spec of page.settings) {
+			const value = config[spec.field] ? spec.on : spec.off;
+			lines.push(`  ${commandWord(spec.field)}:`.padEnd(13) + value + overrideNote(spec.field));
+		}
+	}
+	lines.push(
 		"",
-		"Usage: /pi_cc messages on|off",
-		"       /pi_cc footer on|off",
-		"       /pi_cc draft on|off",
-		"       /pi_cc summary on|off",
-		"       /pi_cc compact on|off",
-		"       /pi_cc idle on|off",
-	];
+		`Usage: /pi_cc <item> on|off  (${SETTINGS.map((spec) => commandWord(spec.field)).join(", ")})`,
+	);
 	notify(ctx, lines.join("\n"), "info");
 }
 
