@@ -184,3 +184,18 @@ test("a reload re-arms the idle compaction: no run will settle to do it", async 
 	await host.emit("session_shutdown", {}, ctx());
 	patches.forgetSession("index-s");
 });
+
+test("a shutdown takes the settings answer back, so an unloaded package leaves Pi its own", async () => {
+	// The wrapper on Pi's SettingsManager stays for the next load; what it
+	// answers must not. Without this, removing the package (a reload without it)
+	// kept Claude Code's reserveTokens and keepRecentTokens until the process
+	// restarted, with no session_before_compact left to honour them.
+	const rt = patches.runtime();
+	await host.emit("session_start", { reason: "startup" }, ctx());
+	assert.equal(typeof rt.override, "function", "a live session answers with Claude Code's numbers");
+	await host.emit("session_shutdown", { reason: "reload" }, ctx());
+	assert.equal(rt.override, undefined, "the wrapper must not keep answering");
+	await host.emit("session_start", { reason: "reload" }, ctx());
+	assert.equal(typeof rt.override, "function", "the next load answers again");
+	await host.emit("session_shutdown", {}, ctx());
+});

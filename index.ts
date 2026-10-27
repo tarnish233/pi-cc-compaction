@@ -25,7 +25,7 @@ import * as breaker from "./breaker.ts";
 import { compactionNotice, handleCompaction } from "./compact.ts";
 import { invalidateConfig, loadConfig } from "./config.ts";
 import { IdleCompactor, requestTtlMs } from "./idle.ts";
-import { ccReserveTokens, commitPending, forgetSession, installPatches, runtime } from "./patches.ts";
+import { ccReserveTokens, commitPending, forgetSession, installPatches, runtime, type ModelLike } from "./patches.ts";
 import { forkPlan } from "./plan.ts";
 import { CONFIG_CHANNEL, registerPiCcCommand } from "./settings.ts";
 
@@ -47,7 +47,12 @@ export default function piCcCompact(pi: ExtensionAPI): void {
 	// (no "Nothing to compact" gate, pi-cc-compaction chooses what stays) only when
 	// the fork can read the cache, otherwise Pi compacts with its own settings;
 	// an open breaker turns automatic compaction off.
-	rt.override = (model) => {
+	//
+	// Assigned on load and on every session start, and taken back on shutdown:
+	// the wrapper on Pi's settings stays for the next load, but it must not keep
+	// answering for a package that is no longer there (removed in pi config, the
+	// reload would otherwise keep Claude Code's numbers until the process ends).
+	const settingsFor = (model: ModelLike | undefined) => {
 		if (!loadConfig().compaction) return undefined;
 		const sessionId = rt.activeSessionId;
 		return {
@@ -56,12 +61,14 @@ export default function piCcCompact(pi: ExtensionAPI): void {
 			...(forkPlan(sessionId, model as { provider?: string; id?: string; api?: string }).ok ? { keepRecentTokens: 1 } : {}),
 		};
 	};
+	rt.override = settingsFor;
 
 	const idle = new IdleCompactor();
 	let toldMissing = false;
 
 	pi.on("session_start", async (event, ctx) => {
 		rt.activeSessionId = ctx.sessionManager.getSessionId();
+		rt.override = settingsFor;
 		// A reload at idle ends no run, so no agent_settled will come to arm
 		// the idle compaction: the continuing session's start re-arms it.
 		if (event.reason === "reload") idle.arm(ctx, loadConfig());
@@ -135,6 +142,7 @@ export default function piCcCompact(pi: ExtensionAPI): void {
 	// falls back to Pi's, which the notice after it says.
 	pi.on("session_shutdown", (event, ctx) => {
 		idle.cancel();
+		rt.override = undefined;
 		try {
 			if (event.reason === "reload") return;
 			const sessionId = ctx.sessionManager.getSessionId();
