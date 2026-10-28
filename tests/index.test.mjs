@@ -185,6 +185,26 @@ test("a reload re-arms the idle compaction: no run will settle to do it", async 
 	patches.forgetSession("index-s");
 });
 
+test("parallel SDK sessions use Pi's settings rather than another session's cache/breaker", async () => {
+	const other = fakePi();
+	mod.default(other.pi);
+	const otherCtx = { ...ctx(), sessionManager: { ...ctx().sessionManager, getSessionId: () => "other-session" } };
+	const rt = patches.runtime();
+	await host.emit("session_start", { reason: "startup" }, ctx());
+	await other.emit("session_start", { reason: "startup" }, otherCtx);
+	try {
+		assert.equal(rt.override, undefined, "there is no session ID on getCompactionSettings to safely choose between the two");
+		rt.captures.set("index-s", { payload: { model: "m", messages: [] }, leafId: "l", at: Date.now(), modelKey: "p/m" });
+		const result = await host.emit("session_before_compact", { reason: "manual", preparation: { tokensBefore: 1 }, branchEntries: [] }, { ...ctx(), model: { provider: "p", id: "m", api: "openai-completions" } });
+		assert.deepEqual(result, [undefined], "Pi compacts with its own settings when two SDK sessions coexist");
+	} finally {
+		patches.forgetSession("index-s");
+		await other.emit("session_shutdown", {}, otherCtx);
+	}
+	assert.equal(typeof rt.override, "function", "the only remaining session can use its own CC settings again");
+	await host.emit("session_shutdown", {}, ctx());
+});
+
 test("a shutdown takes the settings answer back, so an unloaded package leaves Pi its own", async () => {
 	// The wrapper on Pi's SettingsManager stays for the next load; what it
 	// answers must not. Without this, removing the package (a reload without it)

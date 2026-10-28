@@ -184,7 +184,7 @@ export class IdleCompactor {
 			if (this.now() - plan.due > IDLE_LATE_MS) return;
 			const capture = runtime().captures.get(ctx.sessionManager.getSessionId());
 			if (!capture || capture.at !== plan.requestAt) return;
-			if (!config.compaction || !config.idleCompaction || !this.ready(ctx)) return;
+			if (runtime().activeSessions.size > 1 || !config.compaction || !config.idleCompaction || !this.ready(ctx)) return;
 			// compact.ts already reports a failed compaction as a manual /compact
 			// would (it cannot tell an idle pass from a typed one), so a failure it
 			// shows is not repeated here; anything else is.
@@ -200,8 +200,11 @@ export class IdleCompactor {
 					this.notify(ctx, `Idle compaction failed: ${error.message}`, "warning");
 				},
 			});
-		} catch {
-			// a stale context (the session ended) must not throw from a timer
+		} catch (error) {
+			// A synchronous failure never started a compaction. Do not leave this
+			// flag hiding the notice from a later manual /compact.
+			this.compacting = false;
+			this.notify(ctx, `Idle compaction failed: ${error instanceof Error ? error.message : String(error)}`, "warning");
 		}
 	}
 

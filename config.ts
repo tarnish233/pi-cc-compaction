@@ -35,7 +35,9 @@
  */
 
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
+import { randomUUID } from "node:crypto";
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 
 export interface PiCcConfig {
@@ -132,6 +134,70 @@ export function invalidateConfig(): void {
 	cached = undefined;
 }
 
+const LOCK_WAIT_MS = 5000;
+const LOCK_STALE_MS = 60_000;
+const sleep = new Int32Array(new SharedArrayBuffer(4));
+
+function removeStaleLock(lock: string): void {
+	try {
+		const stat = fs.statSync(lock);
+		const age = Date.now() - stat.mtimeMs;
+		if (age < 100) return; // A new writer may not have filled it yet.
+		let stale = age > LOCK_STALE_MS;
+		if (!stale) {
+			const holder = JSON.parse(fs.readFileSync(lock, "utf8")) as { pid?: number; hostname?: string };
+			if (holder.hostname === os.hostname() && typeof holder.pid === "number") {
+				try { process.kill(holder.pid, 0); } catch (error) {
+					stale = (error as NodeJS.ErrnoException).code === "ESRCH";
+				}
+			}
+		}
+		// Do not unlink a lock that another process replaced while we inspected it.
+		const current = fs.statSync(lock);
+		if (stale && current.ino === stat.ino && current.mtimeMs === stat.mtimeMs) fs.rmSync(lock);
+	} catch {
+		// A writer may still be filling it, or another process removed it.
+	}
+}
+
+/** Serialize a short read-modify-write across Pi processes, not just modules in one process. */
+export function withFileLock<T>(file: string, change: () => T): T {
+	const lock = `${file}.write.lock`;
+	const token = randomUUID();
+	const started = Date.now();
+	for (;;) {
+		let fd: number;
+		try {
+			fd = fs.openSync(lock, "wx", 0o600);
+		} catch (error) {
+			if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+			removeStaleLock(lock);
+			if (Date.now() - started > LOCK_WAIT_MS) throw new Error(`Timed out waiting for ${lock}`);
+			Atomics.wait(sleep, 0, 0, 20);
+			continue;
+		}
+		try {
+			fs.writeSync(fd, JSON.stringify({ pid: process.pid, hostname: os.hostname(), token }));
+		} catch (error) {
+			fs.rmSync(lock, { force: true });
+			throw error;
+		} finally {
+			fs.closeSync(fd);
+		}
+		break;
+	}
+	try {
+		return change();
+	} finally {
+		try {
+			const holder = JSON.parse(fs.readFileSync(lock, "utf8")) as { token?: string };
+			if (holder.token === token) fs.rmSync(lock);
+		} catch {
+			// A stale lock may have been replaced; never remove a new owner's lock.
+		}
+	}
+}
+
 /**
  * Write the changed keys to the settings file and return the settings now in
  * effect. Only the patch is written: every other key stays as the user left
@@ -142,17 +208,23 @@ export function invalidateConfig(): void {
 export function saveConfig(patch: Partial<PiCcConfig>): PiCcConfig {
 	const file = configPath();
 	fs.mkdirSync(path.dirname(file), { recursive: true });
-	// Keep keys this version does not know about: the file is the user's.
-	let raw: Record<string, unknown> = {};
-	try {
-		const parsed = JSON.parse(fs.readFileSync(file, "utf8")) as unknown;
-		if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) raw = parsed as Record<string, unknown>;
-	} catch {
-		// A missing or malformed file is rewritten from scratch.
-	}
-	const temp = `${file}.tmp`;
-	fs.writeFileSync(temp, `${JSON.stringify({ ...raw, ...patch }, null, 2)}\n`, "utf8");
-	fs.renameSync(temp, file);
+	withFileLock(file, () => {
+		// Keep keys this version does not know about: the file is the user's.
+		let raw: Record<string, unknown> = {};
+		try {
+			const parsed = JSON.parse(fs.readFileSync(file, "utf8")) as unknown;
+			if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) raw = parsed as Record<string, unknown>;
+		} catch {
+			// A missing or malformed file is rewritten from scratch.
+		}
+		const temp = `${file}.${process.pid}.${randomUUID()}.tmp`;
+		try {
+			fs.writeFileSync(temp, `${JSON.stringify({ ...raw, ...patch }, null, 2)}\n`, "utf8");
+			fs.renameSync(temp, file);
+		} finally {
+			fs.rmSync(temp, { force: true });
+		}
+	});
 	cached = undefined;
 	return loadConfig();
 }

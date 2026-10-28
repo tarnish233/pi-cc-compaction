@@ -1,5 +1,5 @@
 /**
- * The two places pi-cc-compaction reaches into Pi, and the state they share.
+ * The provider and settings hooks pi-cc-compaction uses, plus SDK cleanup.
  *
  * 1. SettingsManager.prototype.getCompactionSettings. Pi reads its compaction
  *    settings through this one method, before every threshold check and
@@ -32,10 +32,17 @@
  *    that fails, an overflow say, never wrote the cache, so the last request
  *    that succeeded stays the one to fork.
  *
- * Both are wrapped once per process, however often the extension loads
+ * 3. ExtensionRunner.invalidate cleans up sessions that an SDK caller ends
+ *    with session.dispose(), which emits no session_shutdown. A Pi reload
+ *    already removes the active session before invalidation, so its cached
+ *    request and breaker survive the reload.
+ *
+ * All are wrapped once per process, however often the extension loads
  * (/reload runs it again): the wrappers read the current behaviour from a
  * runtime object on a global symbol, which every load of this module shares.
  */
+
+import * as breaker from "./breaker.ts";
 
 /** A model, as far as the reserve needs it. */
 export interface ModelLike {
@@ -73,7 +80,9 @@ export interface CompactRuntime {
 	pending: Map<string, Capture>;
 	/** The last request of each session that got a reply: the one to fork. */
 	captures: Map<string, Capture>;
-	/** The session Pi's settings are being read for (one per process). */
+	/** No settings call identifies its session; with several SDK sessions, fall back to Pi. */
+	activeSessions: Map<string, CompactionOverride>;
+	/** The only live session whose settings can safely be overridden. */
 	activeSessionId: string | undefined;
 	/** Pi's live settings object, once Pi has asked it for compaction settings. */
 	settings: SettingsLike | undefined;
@@ -87,8 +96,18 @@ const WRAPPED = Symbol.for("pi-cc-compaction:wrapped");
 /** The state shared by every load of the extension in this process. */
 export function runtime(): CompactRuntime {
 	const holder = globalThis as typeof globalThis & Record<symbol, CompactRuntime | undefined>;
-	holder[RUNTIME] ??= { pending: new Map(), captures: new Map(), activeSessionId: undefined, settings: undefined, override: undefined };
+	holder[RUNTIME] ??= { pending: new Map(), captures: new Map(), activeSessions: new Map(), activeSessionId: undefined, settings: undefined, override: undefined };
+	// A reload can encounter the process-level runtime from an older version.
+	holder[RUNTIME].activeSessions ??= new Map();
 	return holder[RUNTIME];
+}
+
+/** SettingsManager has no session ID: override it only while one extension session is live. */
+export function syncLiveSessions(): void {
+	const rt = runtime();
+	const sessions = [...rt.activeSessions.entries()];
+	rt.activeSessionId = sessions.length === 1 ? sessions[0][0] : undefined;
+	rt.override = sessions.length === 1 ? sessions[0][1] : undefined;
 }
 
 /** The request in flight got its reply: it becomes the one to fork. False when nothing was in flight. */
@@ -176,6 +195,28 @@ export function installPatches(classes: Classes): { missing: string[] } {
 		} as Wrappable;
 		wrapped[WRAPPED] = true;
 		runnerProto!.emitBeforeProviderRequest = wrapped;
+	}
+
+	// SDK callers dispose() without emitting session_shutdown. Invalidation is
+	// their guaranteed cleanup point; a Pi reload already removed its entry in
+	// session_shutdown, so the answered request is still kept across reloads.
+	const invalidate = runnerProto?.invalidate as Wrappable | undefined;
+	if (typeof invalidate === "function" && !invalidate[WRAPPED]) {
+		const wrapped: Wrappable = function (this: { sessionManager?: { getSessionId?(): string } }, ...args: never[]) {
+			const sessionId = this.sessionManager?.getSessionId?.();
+			try {
+				return invalidate.apply(this, args);
+			} finally {
+				if (sessionId && rt.activeSessions.delete(sessionId)) {
+					syncLiveSessions();
+					forgetSession(sessionId);
+					breaker.reset(sessionId);
+					rt.settings = undefined;
+				}
+			}
+		} as Wrappable;
+		wrapped[WRAPPED] = true;
+		runnerProto!.invalidate = wrapped;
 	}
 
 	return { missing };

@@ -143,6 +143,32 @@ test("when it fires it checks again: a newer request, a busy session or a lapsed
 	}
 });
 
+test("an idle timer armed before a second SDK session arrives does not compact with the wrong settings", () => {
+	const h = harness();
+	patches.runtime().captures.set("idle-s", { payload: {}, leafId: "x", at: h.clock.now, ttlMs: HOUR });
+	h.compactor.arm(h.ctx, ON);
+	h.clock.now += h.timers[0].ms;
+	patches.runtime().activeSessions.set("idle-s", () => ({}));
+	patches.runtime().activeSessions.set("second-s", () => ({}));
+	try {
+		h.timers[0].fn();
+		assert.equal(h.compacts.length, 0);
+	} finally {
+		patches.runtime().activeSessions.delete("idle-s");
+		patches.runtime().activeSessions.delete("second-s");
+	}
+});
+
+test("a synchronous compact failure leaves no idle compaction in flight", () => {
+	const h = harness();
+	patches.runtime().captures.set("idle-s", { payload: {}, leafId: "x", at: h.clock.now, ttlMs: HOUR });
+	h.ctx.compact = () => { throw new Error("session replaced"); };
+	h.compactor.arm(h.ctx, ON);
+	h.clock.now += h.timers[0].ms;
+	h.timers[0].fn();
+	assert.equal(h.compactor.compacting, false, "a later manual compact must not be mistaken for an idle one");
+});
+
 test("re-arming or cancelling clears the timer; a failed compaction is reported once", async () => {
 	const h = harness();
 	patches.runtime().captures.set("idle-s", { payload: {}, leafId: "x", at: h.clock.now, ttlMs: HOUR });

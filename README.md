@@ -121,7 +121,8 @@ Claude Code 则在原会话上分叉：system prompt、工具、消息、思考�
 ## 兼容性
 
 - Pi 1.3.0 / 1.4.0
-- 本包改动 Pi 内部的两个方法（`SettingsManager.getCompactionSettings`、`ExtensionRunner.emitBeforeProviderRequest`），每个进程只包装一次。Pi 升级后找不到它们时，本包会提示；记不下请求就读不到缓存，压缩交给 Pi
+- 本包包装 Pi 内部的 `SettingsManager.getCompactionSettings`、`ExtensionRunner.emitBeforeProviderRequest` 和 `ExtensionRunner.invalidate`（SDK 的 `session.dispose()` 不发 `session_shutdown`，最后一个用来清理会话状态），每个进程只包装一次。Pi 升级后找不到前两个方法时，本包会提示；记不下请求就读不到缓存，压缩交给 Pi
+- 同一进程内同时运行多个带本包的 SDK 会话时，`getCompactionSettings` 无法区分调用来自哪个会话：同时存活期间禁用本包的阈值覆盖、分叉压缩和空闲压缩，交给 Pi 自己处理；只剩一个会话时恢复。普通单会话 TUI 不受影响
 - **只装一个压缩插件**：Pi 依次调用所有扩展的 `session_before_compact`，最后一个返回结果的生效，两个插件都生成摘要会付两份钱、前一份被丢弃
 
 ## 本地开发

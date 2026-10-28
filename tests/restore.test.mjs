@@ -65,6 +65,26 @@ test("a file over 5K tokens gets Claude Code's note instead; the total stays wit
 	assert.equal(restore.restoreBlocks(["a.ts", "b.ts", "c.ts", "d.ts"].map((name) => path.join(dir, name))).length, 4);
 });
 
+test("an enormous file is noted without loading its entire contents", () => {
+	const dir = workspace({ "huge.ts": "x".repeat(100_000) });
+	const file = path.join(dir, "huge.ts");
+	const original = fs.readFileSync;
+	fs.readFileSync = (target, ...args) => {
+		if (target === file) throw new Error("the oversized file should not be read");
+		return original(target, ...args);
+	};
+	try {
+		assert.match(restore.restoreBlocks([file])[0] ?? "", /contents are too large to include/);
+	} finally {
+		fs.readFileSync = original;
+	}
+});
+
+test("a huge binary file with a NUL near the beginning is still omitted", () => {
+	const dir = workspace({ "huge.bin": `header\u0000${"x".repeat(100_000)}` });
+	assert.deepEqual(restore.restoreBlocks([path.join(dir, "huge.bin")]), []);
+});
+
 test("a file a codemode script read counts too: its calls are recorded on the tool result", () => {
 	const dir = workspace({ "script.ts": "S", "from-call.ts": "C", "kept.ts": "K" });
 	// One script call read two files; a later one read a third. A tool result

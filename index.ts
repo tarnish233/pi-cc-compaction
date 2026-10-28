@@ -3,7 +3,8 @@
  *
  * - patches.ts: Pi's compaction settings answer with Claude Code's numbers
  *   (threshold window - min(output cap, 20K) - 13K, no "Nothing to compact"
- *   gate), and each ordinary request is captured as the provider got it.
+ *   gate), each ordinary request is captured as the provider got it, and
+ *   SDK sessions disposed without session_shutdown release their state.
  * - compact.ts: /compact, the automatic threshold and overflow recovery are
  *   summarized Claude Code's way, by forking the last answered request so the
  *   summary reads the prompt cache. When no cache can be read (plan.ts) Pi's
@@ -25,7 +26,7 @@ import * as breaker from "./breaker.ts";
 import { compactionNotice, handleCompaction } from "./compact.ts";
 import { invalidateConfig, loadConfig } from "./config.ts";
 import { IdleCompactor, requestTtlMs } from "./idle.ts";
-import { ccReserveTokens, commitPending, forgetSession, installPatches, runtime, type ModelLike } from "./patches.ts";
+import { ccReserveTokens, commitPending, forgetSession, installPatches, runtime, syncLiveSessions, type ModelLike } from "./patches.ts";
 import { forkPlan } from "./plan.ts";
 import { CONFIG_CHANNEL, registerPiCcCommand } from "./settings.ts";
 
@@ -61,17 +62,17 @@ export default function piCcCompact(pi: ExtensionAPI): void {
 			...(forkPlan(sessionId, model as { provider?: string; id?: string; api?: string }).ok ? { keepRecentTokens: 1 } : {}),
 		};
 	};
-	rt.override = settingsFor;
+	if (rt.activeSessions.size === 0) rt.override = settingsFor;
 
 	const idle = new IdleCompactor();
 	let toldMissing = false;
 
 	pi.on("session_start", async (event, ctx) => {
-		rt.activeSessionId = ctx.sessionManager.getSessionId();
-		rt.override = settingsFor;
+		rt.activeSessions.set(ctx.sessionManager.getSessionId(), settingsFor);
+		syncLiveSessions();
 		// A reload at idle ends no run, so no agent_settled will come to arm
 		// the idle compaction: the continuing session's start re-arms it.
-		if (event.reason === "reload") idle.arm(ctx, loadConfig());
+		if (event.reason === "reload" && rt.activeSessions.size === 1) idle.arm(ctx, loadConfig());
 		if (missing.length > 0 && !toldMissing) {
 			toldMissing = true;
 			notify(ctx, `pi-cc-compaction: this Pi has no ${missing.join(" or ")}; compaction and its thresholds fall back to Pi's own`, "warning");
@@ -86,11 +87,12 @@ export default function piCcCompact(pi: ExtensionAPI): void {
 
 	pi.on("session_before_compact", (event, ctx) => {
 		idle.cancel();
+		if (rt.activeSessions.size > 1) return undefined;
 		return handleCompaction(event, ctx, loadConfig());
 	});
 
 	pi.on("agent_settled", (_event, ctx) => {
-		idle.arm(ctx, loadConfig());
+		if (rt.activeSessions.size <= 1) idle.arm(ctx, loadConfig());
 	});
 
 	// A reply arrived: the request it answers wrote the cache and becomes the
@@ -142,13 +144,13 @@ export default function piCcCompact(pi: ExtensionAPI): void {
 	// falls back to Pi's, which the notice after it says.
 	pi.on("session_shutdown", (event, ctx) => {
 		idle.cancel();
-		rt.override = undefined;
 		try {
-			if (event.reason === "reload") return;
 			const sessionId = ctx.sessionManager.getSessionId();
+			rt.activeSessions.delete(sessionId);
+			syncLiveSessions();
+			if (event.reason === "reload") return;
 			forgetSession(sessionId);
 			breaker.reset(sessionId);
-			if (rt.activeSessionId === sessionId) rt.activeSessionId = undefined;
 		} catch {
 			// nothing to forget
 		}

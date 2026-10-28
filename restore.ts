@@ -103,14 +103,31 @@ export function restoreBlocks(files: readonly string[], options: { totalTokens?:
 	const blocks: string[] = [];
 	let used = 0;
 	for (const file of files) {
-		let content: string;
+		let block: string;
 		try {
-			content = fs.readFileSync(file, "utf8");
+			// Even four UTF-8 bytes per character cannot put this file under
+			// the token estimate. Do not synchronously load a huge file just to
+			// replace it with a one-line note.
+			if (fs.statSync(file).size > cap * 16) {
+				// Still skip obvious binary files, without loading their full body.
+				const fd = fs.openSync(file, "r");
+				let binary = false;
+				try {
+					const sample = Buffer.allocUnsafe(4096);
+					binary = sample.subarray(0, fs.readSync(fd, sample, 0, sample.length, 0)).includes(0);
+				} finally {
+					fs.closeSync(fd);
+				}
+				if (binary) continue;
+				block = tooLargeNote(file);
+			} else {
+				const content = fs.readFileSync(file, "utf8");
+				if (content.includes("\u0000")) continue;
+				block = estimateTokens(content) > cap ? tooLargeNote(file) : readCall(file, content);
+			}
 		} catch {
 			continue;
 		}
-		if (content.includes("\u0000")) continue;
-		const block = estimateTokens(content) > cap ? tooLargeNote(file) : readCall(file, content);
 		const tokens = estimateTokens(block);
 		if (used + tokens > total) continue;
 		used += tokens;
