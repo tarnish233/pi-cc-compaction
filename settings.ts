@@ -106,7 +106,7 @@ const PAGES: SettingsPage[] = [
 				on: "on",
 				off: "off",
 				description:
-					"Enter queues while Pi works and Ctrl+Enter sends now, as in Claude Code. off: Pi's keys (Enter sends, Alt+Enter queues).",
+					"Enter queues while Pi works; Ctrl+Enter is not bound by this feature. off: Pi's keys (Enter sends, Alt+Enter queues).",
 			},
 		],
 	},
