@@ -1,6 +1,6 @@
 {
 	"name": "pi-cc-compaction",
-	"version": "0.2.9",
+	"version": "0.2.10",
 	"description": "Claude Code's compaction for the Pi coding agent: summaries that reuse the prompt cache, Claude Code's thresholds and prompt, and idle compaction before the cache expires.",
 	"author": "tarnish233",
 	"type": "module",
