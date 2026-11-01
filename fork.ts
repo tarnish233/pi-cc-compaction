@@ -17,6 +17,7 @@
 
 import { isContextOverflow, isRetryableAssistantError } from "@earendil-works/pi-ai";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { extractSummary, INVALID_SUMMARY } from "./prompt.ts";
 
 /** The provider APIs whose request bodies can be extended by one user turn. */
 export const FORKABLE_APIS: ReadonlySet<string> = new Set(["anthropic-messages", "openai-completions", "openai-responses"]);
@@ -91,7 +92,8 @@ const NAME_FIELDS = ["provider", "model", "responseModel"] as const;
 
 /**
  * Read a summary reply. A reply cut off by the output cap is kept, as Claude
- * Code keeps it; an error, an abort or an empty reply is a failure. An error
+ * Code keeps it, only when it contains a usable summary. An error, an abort,
+ * an empty reply or scratchpad-only output is a failure. An error
  * is classified with Pi's own rules (pi-ai): retryable (a transient provider
  * or transport error) and overflow (the request is over the context window).
  * Only an error can be an overflow here: Pi also reads a capped reply as one,
@@ -114,6 +116,7 @@ export function interpretReply(response: ReplyLike, contextWindow?: number): For
 		.join("\n")
 		.trim();
 	if (!reply) return { ok: false, reason: "empty reply" };
+	if (extractSummary(reply) === undefined) return { ok: false, reason: INVALID_SUMMARY };
 	const named = Object.fromEntries(NAME_FIELDS.filter((field) => response[field]).map((field) => [field, response[field]]));
 	return { ok: true, reply, usage: response.usage, stopReason: response.stopReason ?? "stop", ...named };
 }

@@ -14,7 +14,7 @@ const ON = { compaction: true, idleCompaction: true };
 const NO_WAIT = { retry: { maxRetries: 3, baseDelayMs: 1, sleep: async () => {} } };
 const user = (id, text) => ({ id, type: "message", message: { role: "user", content: [{ type: "text", text }] } });
 const assistant = (id, content, stopReason = "toolUse") => ({ id, type: "message", message: { role: "assistant", content, stopReason } });
-const toolResult = (id, text) => ({ id, type: "message", message: { role: "toolResult", toolCallId: "t", toolName: "read", content: [{ type: "text", text }] } });
+const toolResult = (id, text) => ({ id, type: "message", message: { role: "toolResult", toolCallId: "t", toolName: "read", isError: false, content: [{ type: "text", text }] } });
 
 /** u1 -> a1 (read) -> r1 -> a2 (final): the answered request carried u1..r1; a2 answered it. */
 function conversation(dir = "/work") {
@@ -71,7 +71,7 @@ function event(entries, overrides = {}) {
 	};
 }
 
-const LIVE = { model: "m", messages: [{ role: "system", content: "SYS" }, { role: "user", content: "fix the bug" }, { role: "tool", content: "const bug = 1;" }], stream: true };
+const LIVE = { model: "m", messages: [{ role: "system", content: "SYS" }, { role: "user", content: "fix the bug" }, { role: "tool", tool_call_id: "t", content: "const bug = 1;" }], stream: true };
 function answered(sessionId, leafId = "r1", extra = {}) {
 	breaker.reset(sessionId);
 	patches.runtime().pending.delete(sessionId);
@@ -308,19 +308,23 @@ test("a carried tool name Claude Code would reject is dropped", async () => {
 	assert.ok(result.compaction.summary.includes("<tools-used-before-summary>bash, read</tools-used-before-summary>"));
 });
 
-test("the files read before the summary are read again after it", async () => {
+test("file restoration replays the approved excerpt, never new on-disk content", async (t) => {
 	const dir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-cc-compaction-"));
-	fs.writeFileSync(path.join(dir, "bug.ts"), "const bug = 0;\n");
+	t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+	fs.writeFileSync(path.join(dir, "bug.ts"), "NEW_UNAPPROVED_CONTENT\n");
 	const entries = conversation(dir);
 	answered("s1");
 	const { ctx } = fakeCtx({ entries, cwd: dir, replies: [reply("<summary>S</summary>")] });
 	const result = await compact.handleCompaction(event(entries), ctx, ON, NO_WAIT);
-	assert.ok(result.compaction.summary.endsWith(`Result of calling the read tool:\nconst bug = 0;\n`));
+	assert.ok(result.compaction.summary.endsWith(`Result of calling the read tool:\nconst bug = 1;`));
+	assert.ok(result.compaction.summary.includes("Cached output from a successful read"));
+	assert.ok(!result.compaction.summary.includes("NEW_UNAPPROVED_CONTENT"));
 	assert.deepEqual(result.compaction.details.restoredFiles, [path.join(dir, "bug.ts")]);
 });
 
-test("tools a codemode script called are listed in the summary, and its files re-read", async () => {
+test("tools a codemode script called are listed, with file references rather than reconstructed results", async (t) => {
 	const dir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-cc-compaction-script-"));
+	t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
 	fs.writeFileSync(path.join(dir, "bug.ts"), "const bug = 0;\n");
 	// The model called codemode; the script read a file and ran grep. Pi records
 	// those calls on the script's result, not as tool calls of their own.
@@ -352,4 +356,54 @@ test("tools a codemode script called are listed in the summary, and its files re
 	const result = await compact.handleCompaction(event(entries), ctx, ON, NO_WAIT);
 	assert.ok(result.compaction.summary.includes("<tools-used-before-summary>codemode, grep, read</tools-used-before-summary>"), result.compaction.summary.slice(0, 300));
 	assert.deepEqual(result.compaction.details.restoredFiles, [path.join(dir, "bug.ts")]);
+	assert.ok(result.compaction.summary.includes("Previously accessed file:"));
+	assert.ok(!result.compaction.summary.includes("const bug = 0;"));
+});
+
+test("unusable summaries cancel compaction without replacing history or adding model requests", async () => {
+	for (const text of ["<analysis>scratchpad only</analysis>", "<analysis>truncated", "I will fix it now.", "<summary> </summary>"]) {
+		const entries = conversation(), before = structuredClone(entries);
+		answered("s1");
+		const { ctx, seen } = fakeCtx({ entries, replies: [reply(text, "length")] });
+		assert.deepEqual(await compact.handleCompaction(event(entries), ctx, ON, NO_WAIT), { cancel: true }, text);
+		assert.deepEqual(entries, before, "the original branch remains intact");
+		assert.equal(seen.sent.length, 1, "no semantic retry or fallback algorithm");
+		assert.match(seen.notices[0].message, /non-empty <summary>/);
+	}
+});
+
+test("a useful partial summary is committed without leftover outer tags or scratchpad", async () => {
+	const entries = conversation();
+	answered("s1");
+	const { ctx } = fakeCtx({ entries, replies: [reply("<analysis>scratchpad</analysis><summary>Useful partial facts", "length")] });
+	const result = await compact.handleCompaction(event(entries), ctx, ON, NO_WAIT);
+	assert.equal(result.compaction.details.stopReason, "length");
+	assert.ok(result.compaction.summary.includes("Summary:\nUseful partial facts"));
+	assert.ok(!result.compaction.summary.includes("scratchpad"));
+	assert.ok(!result.compaction.summary.includes("<summary>"));
+});
+
+test("a permission-denied read never becomes a restored file in the stored summary", async (t) => {
+	const dir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-cc-compaction-denied-"));
+	t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+	fs.writeFileSync(path.join(dir, "bug.ts"), "DENIED_FIXTURE_CONTENT");
+	const entries = conversation(dir);
+	entries[2].message.isError = true;
+	entries[2].message.content = [{ type: "text", text: "Permission denied by tool_call policy" }];
+	answered("s1");
+	const { ctx } = fakeCtx({ entries, cwd: dir, replies: [reply("<summary>S</summary>")] });
+	const result = await compact.handleCompaction(event(entries), ctx, ON, NO_WAIT);
+	assert.deepEqual(result.compaction.details.restoredFiles, []);
+	assert.ok(!result.compaction.summary.includes("DENIED_FIXTURE_CONTENT"));
+	assert.ok(!result.compaction.summary.includes("Result of calling the read tool:"));
+});
+
+test("request-side filtering cannot be bypassed by restoring raw session content", async () => {
+	const entries = conversation();
+	entries[2].message.content = [{ type: "text", text: "RAW_SESSION_SECRET_NOT_SENT" }];
+	answered("s1", "r1", { payload: { ...LIVE, messages: LIVE.messages.map((message) => message.role === "tool" ? { ...message, content: "[redacted before provider request]" } : message) } });
+	const { ctx } = fakeCtx({ entries, replies: [reply("<summary>S</summary>")] });
+	const result = await compact.handleCompaction(event(entries), ctx, ON, NO_WAIT);
+	assert.ok(result.compaction.summary.includes("Previously accessed file:"));
+	assert.ok(!result.compaction.summary.includes("RAW_SESSION_SECRET_NOT_SENT"));
 });

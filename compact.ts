@@ -25,9 +25,9 @@
  * rapid refills in a row, stop it for the session (breaker.ts). A
  * conversation of fewer than two rounds has nothing to compact.
  *
- * A reply cut off by the output cap is used, as Claude Code uses it. The
- * stored summary is Claude Code's summary message (prompt.ts) followed by
- * the files it would re-read (restore.ts).
+ * A reply cut off by the output cap is used only if it contains a usable
+ * summary. The stored summary carries cached, successful read excerpts or
+ * file references (restore.ts), never fresh filesystem reads.
  */
 
 import type { ExtensionContext, SessionBeforeCompactResult } from "@earendil-works/pi-coding-agent";
@@ -37,7 +37,7 @@ import { buildForkPayload, forkWithRetry, type RetryPolicy } from "./fork.ts";
 import { runtime } from "./patches.ts";
 import { forkPlan } from "./plan.ts";
 import { CONTINUATION_OPENER, summaryMessage, summaryRequest } from "./prompt.ts";
-import { recentFiles, restoreBlocks } from "./restore.ts";
+import { capturedToolResults, recentFiles, restoreBlocks } from "./restore.ts";
 
 /** Claude Code's messages. */
 export const NOT_ENOUGH_MESSAGES = "Not enough messages to compact.";
@@ -232,19 +232,21 @@ export async function handleCompaction(
 	if (rounds < 2) return fail(ctx, sessionId, reason, NOT_ENOUGH_MESSAGES);
 
 	const ask = summaryRequest(event.customInstructions);
-	const payload = buildForkPayload((ctx.model as { api: string }).api, plan.capture.payload, ask);
+	const api = (ctx.model as { api: string }).api;
+	const payload = buildForkPayload(api, plan.capture.payload, ask);
 	if (!payload) return fail(ctx, sessionId, reason, `${ERROR_PREFIX}the request could not be extended`);
 	const result = await forkWithRetry(ctx, payload, event.signal, deps.retry ?? piRetryPolicy());
 	if (event.signal?.aborted) return { cancel: true };
 	if (!result.ok) return fail(ctx, sessionId, reason, result.overflow ? COULD_NOT_REDUCE : `${ERROR_PREFIX}${result.reason}`);
 
-	const restoredFiles = recentFiles([...summarized, ...kept] as never, kept as never, ctx.cwd);
+	const messages = [...summarized, ...kept];
+	const restoredFiles = recentFiles(messages, kept, ctx.cwd);
 	const summary = summaryMessage({
 		reply: result.reply,
 		toolNames: toolNamesOf([...summarized, ...kept]),
 		transcriptPath: ctx.sessionManager.getSessionFile() ?? undefined,
 		keptMessages: kept.length > 0,
-		restored: restoreBlocks(restoredFiles),
+		restored: restoreBlocks(restoredFiles, { messages, cwd: ctx.cwd, readCache: capturedToolResults(api, plan.capture.payload) }),
 	});
 	const model = ctx.model as { provider: string; id: string };
 	const details: CompactionDetails = {

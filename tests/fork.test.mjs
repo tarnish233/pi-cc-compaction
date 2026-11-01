@@ -148,7 +148,7 @@ test("failures are classified with Pi's own rules: retryable, overflow", () => {
 		overflow: true,
 	});
 	assert.deepEqual(fork.interpretReply(err("invalid x-api-key")), { ok: false, reason: "invalid x-api-key", retryable: false, overflow: false });
-	assert.equal(fork.interpretReply({ stopReason: "length", content: [{ type: "text", text: "cut" }], usage: { input: 9e6, cacheRead: 0 } }).ok, true, "a capped reply is kept, never read as an overflow");
+	assert.equal(fork.interpretReply({ stopReason: "length", content: [{ type: "text", text: "<summary>cut" }], usage: { input: 9e6, cacheRead: 0 } }).ok, true, "a useful capped summary is kept, never read as an overflow");
 });
 
 test("lowerOutputCap: only the output cap field moves, never below 4096", () => {
@@ -216,9 +216,9 @@ test("forkWithRetry: an overflow lowers the output cap once; other errors stop a
 	assert.equal(fatal.ok, false);
 });
 
-test("requestFork: a capped reply is still a summary; errors, empty replies and throws are not", async () => {
-	const capped = await fork.requestFork(fakeCtx({ stopReason: "length", content: [{ type: "text", text: "<analysis>cut" }], usage: {} }), { messages: [] }, undefined);
-	assert.equal(capped.ok, true, "Claude Code keeps a reply cut off by the output cap");
+test("requestFork: a useful capped summary is kept; errors, empty replies and throws are not", async () => {
+	const capped = await fork.requestFork(fakeCtx({ stopReason: "length", content: [{ type: "text", text: "<summary>Useful partial summary" }], usage: {} }), { messages: [] }, undefined);
+	assert.equal(capped.ok, true, "a cut-off reply still needs usable summary content");
 	const error = await fork.requestFork(fakeCtx({ stopReason: "error", errorMessage: "prompt is too long", content: [] }), { messages: [] }, undefined);
 	assert.equal(error.ok, false);
 	assert.equal(error.reason, "prompt is too long");

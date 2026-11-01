@@ -40,16 +40,48 @@ export function summaryRequest(customInstructions?: string): string {
 	return text + reminder(SUMMARY_REPLY_SHAPE);
 }
 
-const ANALYSIS_BLOCK = /<analysis>[\s\S]*?<\/analysis>/;
-const SUMMARY_BLOCK = /<summary>([\s\S]*?)<\/summary>/;
+const ANALYSIS_BLOCK = /<analysis>[\s\S]*?<\/analysis>/g;
+const REPLY_TAG = /<\/?(?:analysis|summary)>/g;
+// Protocol tags quoted in prose or code are examples, not block delimiters.
+const LITERAL_SPAN = /(`+)[\s\S]*?\1|(?<![\w])"(?:\\.|[^"\\\n])*"|(?<![\w])'(?:\\.|[^'\\\n])*'|“[^”\n]*”|‘[^’\n]*’/g;
 
-/** Claude Code's reply cleanup: drop the analysis, label the summary, squeeze blank lines. */
+export const INVALID_SUMMARY = "Summary reply did not contain a non-empty <summary> block.";
+
+/** A real summary outside the scratchpad; a non-empty unfinished block is still useful. */
+export function extractSummary(reply: string): string | undefined {
+	let analysisDepth = 0;
+	let summaryDepth = 0;
+	let start: number | undefined;
+	const literals = [...reply.matchAll(LITERAL_SPAN)].map((match) => ({ start: match.index, end: match.index + match[0].length }));
+	let literalIndex = 0;
+	const usable = (body: string): string | undefined => {
+		const text = body.trim();
+		const content = text.replace(ANALYSIS_BLOCK, "").replace(/<\/?summary>/g, "").replace(/<[^>]*$/, "").trim();
+		return content && !content.startsWith("<analysis>") ? text : undefined;
+	};
+	for (const match of reply.matchAll(REPLY_TAG)) {
+		while (literals[literalIndex]?.end <= match.index) literalIndex++;
+		if (literals[literalIndex]?.start <= match.index) continue;
+		const tag = match[0];
+		if (start !== undefined) {
+			if (tag === "<summary>") summaryDepth++;
+			if (tag === "</summary>" && --summaryDepth === 0) return usable(reply.slice(start, match.index));
+			continue;
+		}
+		if (tag === "<analysis>") analysisDepth++;
+		else if (tag === "</analysis>") analysisDepth = Math.max(0, analysisDepth - 1);
+		else if (tag === "<summary>" && analysisDepth === 0) {
+			start = match.index + tag.length;
+			summaryDepth = 1;
+		}
+	}
+	return start === undefined ? undefined : usable(reply.slice(start));
+}
+
+/** Drop the scratchpad, normalize complete or useful partial summaries, squeeze blank lines. */
 export function formatSummary(reply: string): string {
-	return reply
-		.replace(ANALYSIS_BLOCK, "")
-		.replace(SUMMARY_BLOCK, (_match, body: string) => `Summary:\n${body.trim()}`)
-		.replace(/\n\n+/g, "\n\n")
-		.trim();
+	const body = extractSummary(reply);
+	return body === undefined ? "" : `Summary:\n${body}`.replace(/\n\n+/g, "\n\n");
 }
 
 export const CONTINUATION_OPENER =
@@ -70,14 +102,16 @@ export interface SummaryMessageOptions {
 	transcriptPath?: string;
 	/** Whether recent messages follow the summary verbatim. */
 	keptMessages: boolean;
-	/** Re-read files and other context restored after the summary. */
+	/** Cached file excerpts and references restored after the summary. */
 	restored?: string[];
 }
 
 /** The text Pi stores as the compaction summary, built the way Claude Code builds its summary message. */
 export function summaryMessage(options: SummaryMessageOptions): string {
+	const summary = formatSummary(options.reply);
+	if (!summary) throw new Error(INVALID_SUMMARY);
 	const tools = (options.toolNames ?? []).join(", ");
-	let text = `${CONTINUATION_OPENER}\n\n<tools-used-before-summary>${tools}</tools-used-before-summary>\n${formatSummary(options.reply)}`;
+	let text = `${CONTINUATION_OPENER}\n\n<tools-used-before-summary>${tools}</tools-used-before-summary>\n${summary}`;
 	if (options.transcriptPath) {
 		text += `\n\nIf you need specific details from before compaction (like exact code snippets, error messages, or content you generated), read the full transcript at: ${options.transcriptPath}`;
 	}
