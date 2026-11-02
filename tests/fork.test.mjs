@@ -225,7 +225,8 @@ test("requestFork: a useful capped summary is kept; errors, empty replies and th
 	assert.equal(error.overflow, true);
 	const empty = await fork.requestFork(fakeCtx({ stopReason: "stop", content: [{ type: "text", text: "  " }] }), { messages: [] }, undefined);
 	assert.equal(empty.ok, false);
-	assert.equal(empty.reason, "empty reply");
+	assert.equal(empty.unusableSummary, true);
+	assert.match(empty.reason, /did not contain a non-empty <summary> block/);
 	const thrown = await fork.requestFork(fakeCtx(new Error("no api key")), { messages: [] }, undefined);
 	assert.equal(thrown.ok, false);
 	assert.equal(thrown.reason, "no api key");

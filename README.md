@@ -22,8 +22,8 @@ ln -sfn "$PWD" ~/.pi/agent/extensions/pi-cc-compaction
 | --- | --- | --- |
 | 复用缓存的摘要 | 摘要请求 = 主对话最后一次请求原样 + 末尾一条摘要指令，读提示缓存而不是重读整段对话 | `fork.ts`、`compact.ts` |
 | Claude Code 的阈值 | 自动压缩在 `窗口 − min(最大输出, 20K) − 13K` 触发（多数模型约 `窗口 − 33K`）；任何有两轮以上的会话都能 `/compact` | `patches.ts` |
-| Claude Code 的失败处理 | 失败就取消并给出 Claude Code 的提示，不换算法；自动压缩有失败熔断和抖动熔断 | `compact.ts`、`breaker.ts` |
-| Claude Code 的提示词 | 九段式摘要（先 `<analysis>` 再 `<summary>`），`/compact <指令>` 作为 Additional Instructions；摘要带 Claude Code 的续接说明 | `prompt.ts` |
+| Claude Code 的失败处理 | 失败就取消并给出 Claude Code 的提示，不换算法；唯一例外是回复里没有可用 `<summary>`：先按更严格的口吻重问一次，仍不行才交给 Pi 自己的压缩 | `compact.ts`、`fork.ts`、`breaker.ts` |
+| Claude Code 的提示词 | 九段式摘要（先 `<analysis>` 再 `<summary>`），`/compact <指令>` 作为 Additional Instructions；摘要带 Claude Code 的续接说明；解析也照 2.1.316 的读法（先丢第一块 analysis，再取 summary 正文） | `prompt.ts` |
 | 压缩后补回文件 | 最多补回 5 个已确认成功的文件上下文：直接 read 复用已返回片段（每个 ≤5K token，合计 ≤50K）；写改和脚本调用只留路径引用，不自行重读 | `restore.ts` |
 | 空闲压缩 | 缓存有效期 ≥1 小时的模型，闲置到有效期的 75%（1 小时缓存即 45 分钟）且上下文 ≥10 万 token 时先压缩 | `idle.ts` |
 | 压缩提示 | 每次压缩后说明是本包还是 Pi 压缩的，交给 Pi 时写明原因 | `compact.ts` |
@@ -39,7 +39,7 @@ Claude Code 则在原会话上分叉：system prompt、工具、消息、思考�
 2. **分叉请求**：压缩时把这份请求体原样发出，只在末尾追加摘要指令。思考强度、`max_tokens` 都沿用主请求。缓存热时几乎全部命中（实测三种 API 都在 95% 以上，剩下的是摘要指令本身）。支持 `anthropic-messages`、`openai-completions`、`openai-responses`。
 3. **保留范围**：分叉起点之后新增的消息原样保留，相当于 Claude Code 保留的“最后一轮”；摘要里会注明这些消息摘要没看到。
 4. **超限恢复**：超限的那次请求没有回复，分叉起点自然是它前一次成功的请求：放得下（Pi 发它时已给输入加输出留了余量），缓存也是热的。超限的那一轮原样保留，压缩后 Pi 自动重发。极少数情况下摘要请求仍报超长，只调低这次请求的输出上限重试一次，缓存前缀不变。
-5. **有摘要才接收**：必须包含有实际内容的 `<summary>`；有用的截断摘要仍可采用，并规范化外层标签。纯 analysis、普通任务回答或空 summary 会取消这次压缩，保留原上下文，不额外发送补救请求（原有网络和超限重试不变）。
+5. **按 CC 的读法解析**：和 Claude Code 2.1.316 一样——先去掉回复里第一块 `<analysis>…</analysis>`，再取 `<summary>…</summary>` 的正文；被输出上限截断、只剩未闭合 `<summary>` 的回复也算摘要。**不猜引号或代码围栏**：模型把格式示例写进围栏里，CC 会照收，本包也照收（第一个 `</summary>` 截断，示例会压过后面真正的摘要）。和 CC 的两点差异：CC 把"整段去掉 analysis 后的文本"都存成摘要，本包只存 `<summary>` 块内正文；CC 的空块也算摘要，本包不算（另一个收紧是不接受只有散文、没有标签的回复）。没有摘要时**先在末尾追加一条更严格的追问重问一次**（Anthropic 的消息会并进最后一条 user turn，缓存前缀不变），仍不行才把这次压缩交给 Pi 自己的实现，提示里写明原因和那段回复的首尾（网络错误和超限重试仍照旧）。
 6. **记下模型**：Pi 的压缩记录本身不写模型，本包在记录的 `details` 里写上做摘要的 `provider`、`model`（以及 `responseModel`，若有），字段名和 Pi 回复消息上的一致，读会话日志的用量工具可以据此认出模型。
 
 ### 文件恢复与权限
@@ -81,6 +81,7 @@ Claude Code 则在原会话上分叉：system prompt、工具、消息、思考�
 
 - 网络中断、5xx、过载等临时错误，按 Pi 的重试设置（`retry.maxRetries`、`retry.baseDelayMs`）退避重试
 - 仍然失败就取消这次压缩，显示 Claude Code 的提示：`Error during compaction: …`；摘要请求超长且无法再降时为 `Compaction failed · conversation could not be reduced below the context limit`；不足两轮时为 `Not enough messages to compact.`
+- 回复里没有可用 `<summary>`（包括空回复）不算“失败”：先追加一条更严格的追问重问一次（同一前缀，Anthropic 上并入最后一条 user turn），仍不行就交给 Pi 自己的压缩，提示写成 `Compacted by Pi's own compaction · <原因>`。原因里带 `stopReason`、输出 token 数和那段回复的首尾，看得出是超输出上限截断，还是模型没按格式写。交接时 Pi 的保留范围已按本包的 `keepRecentTokens=1` 算好（保留最后一轮，其余进摘要，不是 Pi 默认的 20K）。空闲压缩交回 Pi 时只留 idle 自己的那一条提示，不重复
 - 自动压缩连续失败 3 次，本会话不再自动压缩（失败熔断）；连续 3 次在压缩后 3 轮内又回到阈值，判定为抖动，同样停止（`Autocompact is thrashing: …`）。熔断后 `/compact` 仍可用，任何一次压缩成功都会解除熔断
 
 ## 空闲压缩

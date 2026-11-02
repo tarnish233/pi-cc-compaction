@@ -19,11 +19,13 @@
  * fitted the window and whose cache is warm.
  *
  * Failures are Claude Code's (2.1.308): a compaction that fails is
- * cancelled, never handed to another algorithm. Transient errors are retried
- * first, with Pi's retry settings. /compact shows Claude Code's message;
- * automatic compaction counts the failure, and three in a row, or three
- * rapid refills in a row, stop it for the session (breaker.ts). A
- * conversation of fewer than two rounds has nothing to compact.
+ * cancelled, never handed to another algorithm. A reply that arrived without
+ * a usable summary is asked for once more, stricter, before that counts as a
+ * failure at all; still unusable, Pi's own compaction runs and the notice says
+ * why. Transient errors are retried first, with Pi's retry settings. /compact
+ * shows Claude Code's message; automatic compaction counts the failure, and
+ * three in a row, or three rapid refills in a row, stop it for the session
+ * (breaker.ts). A conversation of fewer than two rounds has nothing to compact.
  *
  * A reply cut off by the output cap is used only if it contains a usable
  * summary. The stored summary carries cached, successful read excerpts or
@@ -36,7 +38,7 @@ import type { PiCcConfig } from "./config.ts";
 import { buildForkPayload, forkWithRetry, type RetryPolicy } from "./fork.ts";
 import { runtime } from "./patches.ts";
 import { forkPlan } from "./plan.ts";
-import { CONTINUATION_OPENER, summaryMessage, summaryRequest } from "./prompt.ts";
+import { CONTINUATION_OPENER, SUMMARY_ONLY_ASK, summaryMessage, summaryRequest } from "./prompt.ts";
 import { capturedToolResults, recentFiles, restoreBlocks } from "./restore.ts";
 
 /** Claude Code's messages. */
@@ -107,7 +109,7 @@ const handedToPi = new Map<string, string>();
  * What to say once a compaction is stored: whose it was. Said after Pi has
  * redrawn the transcript (index.ts), since a line shown during the
  * compaction vanishes with the redraw. Nothing for a compaction this package
- * had no part in (turned off, another extension's), or for an idle fork,
+ * had no part in (turned off, another extension's), or for an idle one,
  * which idle.ts announces itself.
  */
 export function compactionNotice(
@@ -118,7 +120,7 @@ export function compactionNotice(
 	const reason = handedToPi.get(sessionId);
 	handedToPi.delete(sessionId);
 	if ((event.compactionEntry?.details as { engine?: unknown } | undefined)?.engine === "fork") return options.idle ? undefined : FORKED_NOTICE;
-	if (!event.fromExtension && reason) return `Compacted by Pi's own compaction \u00b7 ${reason}`;
+	if (!event.fromExtension && reason) return options.idle ? undefined : `Compacted by Pi's own compaction \u00b7 ${reason}`;
 	return undefined;
 }
 
@@ -235,9 +237,27 @@ export async function handleCompaction(
 	const api = (ctx.model as { api: string }).api;
 	const payload = buildForkPayload(api, plan.capture.payload, ask);
 	if (!payload) return fail(ctx, sessionId, reason, `${ERROR_PREFIX}the request could not be extended`);
-	const result = await forkWithRetry(ctx, payload, event.signal, deps.retry ?? piRetryPolicy());
+	const result = await forkWithRetry(
+		ctx,
+		payload,
+		event.signal,
+		deps.retry ?? piRetryPolicy(),
+		(current) => buildForkPayload(api, current, SUMMARY_ONLY_ASK),
+	);
 	if (event.signal?.aborted) return { cancel: true };
-	if (!result.ok) return fail(ctx, sessionId, reason, result.overflow ? COULD_NOT_REDUCE : `${ERROR_PREFIX}${result.reason}`);
+	if (!result.ok) {
+		// The fork could not produce a summary. Pi's own compaction still can, so
+		// it runs, and the notice after it carries this reason (whose reply, how it
+		// stopped, what it wrote at both ends). Pi chose the cut point before it
+		// asked for this compaction, with the keepRecentTokens this package answers
+		// while a fork is planned (index.ts), so the fallback keeps the last round
+		// rather than Pi's usual 20K - everything else is still in Pi's summary.
+		if (result.unusableSummary) {
+			handedToPi.set(sessionId, result.reason);
+			return undefined;
+		}
+		return fail(ctx, sessionId, reason, result.overflow ? COULD_NOT_REDUCE : `${ERROR_PREFIX}${result.reason}`);
+	}
 
 	const messages = [...summarized, ...kept];
 	const restoredFiles = recentFiles(messages, kept, ctx.cwd);

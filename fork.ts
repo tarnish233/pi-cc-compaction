@@ -17,7 +17,7 @@
 
 import { isContextOverflow, isRetryableAssistantError } from "@earendil-works/pi-ai";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { extractSummary, INVALID_SUMMARY } from "./prompt.ts";
+import { extractSummary, INVALID_SUMMARY, SUMMARY_TRUNCATED } from "./prompt.ts";
 
 /** The provider APIs whose request bodies can be extended by one user turn. */
 export const FORKABLE_APIS: ReadonlySet<string> = new Set(["anthropic-messages", "openai-completions", "openai-responses"]);
@@ -73,7 +73,7 @@ export function buildForkPayload(api: string, payload: unknown, ask: string): Pa
 
 export type ForkResult =
 	| { ok: true; reply: string; usage: unknown; stopReason: string; provider?: string; model?: string; responseModel?: string }
-	| { ok: false; reason: string; retryable?: boolean; overflow?: boolean };
+	| { ok: false; reason: string; retryable?: boolean; overflow?: boolean; unusableSummary?: boolean };
 
 /** A provider reply, as far as a summary needs it. */
 export interface ReplyLike {
@@ -90,14 +90,26 @@ export interface ReplyLike {
 /** How a reply names the model that wrote it. */
 const NAME_FIELDS = ["provider", "model", "responseModel"] as const;
 
+/** What a reply that missed the shape looked like, in the message: why it stopped, and both ends. */
+function describeReply(reply: string, stopReason: string | undefined, usage: unknown): string {
+	const output = (usage as { output?: unknown } | undefined)?.output;
+	// One line, no control characters: the reply is model output and lands in a notice.
+	const squeeze = (text: string): string => text.replace(/[\s\u0000-\u001f\u007f-\u009f]+/g, " ");
+	const head = squeeze(reply.slice(0, 120));
+	const tail = reply.length > 200 ? ` \u2026 ${squeeze(reply.slice(-80))}` : "";
+	return `${stopReason ?? "stop"}${typeof output === "number" ? `, ${output} output tokens` : ""}: "${head}${tail}"`;
+}
+
 /**
  * Read a summary reply. A reply cut off by the output cap is kept, as Claude
- * Code keeps it, only when it contains a usable summary. An error, an abort,
- * an empty reply or scratchpad-only output is a failure. An error
- * is classified with Pi's own rules (pi-ai): retryable (a transient provider
- * or transport error) and overflow (the request is over the context window).
+ * Code keeps it, only when it contains a usable summary. An error is a failure,
+ * classified with Pi's own rules (pi-ai): retryable (a transient provider or
+ * transport error) and overflow (the request is over the context window).
  * Only an error can be an overflow here: Pi also reads a capped reply as one,
- * but a capped summary is kept.
+ * but a capped summary is kept. A reply with no usable summary - empty, text
+ * without a <summary>, or scratchpad-only - says how it stopped and quotes
+ * both ends of what it wrote, so the re-ask (SUMMARY_ONLY_ASK) and the notice
+ * after it can be read.
  */
 export function interpretReply(response: ReplyLike, contextWindow?: number): ForkResult {
 	if (response.stopReason === "aborted") return { ok: false, reason: response.errorMessage ?? "aborted" };
@@ -115,8 +127,12 @@ export function interpretReply(response: ReplyLike, contextWindow?: number): For
 		.map((block) => block.text)
 		.join("\n")
 		.trim();
-	if (!reply) return { ok: false, reason: "empty reply" };
-	if (extractSummary(reply) === undefined) return { ok: false, reason: INVALID_SUMMARY };
+	if (!reply || extractSummary(reply) === undefined) {
+		// Which shape the reply missed, and what it wrote: an empty reply (no text at
+		// all, or a cap that stopped it first) says so the same way.
+		const shape = response.stopReason === "length" ? SUMMARY_TRUNCATED : INVALID_SUMMARY;
+		return { ok: false, reason: `${shape} (${describeReply(reply, response.stopReason, response.usage)})`, unusableSummary: true };
+	}
 	const named = Object.fromEntries(NAME_FIELDS.filter((field) => response[field]).map((field) => [field, response[field]]));
 	return { ok: true, reply, usage: response.usage, stopReason: response.stopReason ?? "stop", ...named };
 }
@@ -203,7 +219,8 @@ function sleepFor(ms: number, signal: AbortSignal | undefined): Promise<void> {
 }
 
 /**
- * Send the fork until it succeeds or fails for good: transient errors are
+ * Send the fork until it succeeds or fails for good: a reply without a usable
+ * summary is asked for once more, stricter (escalate), transient errors are
  * retried with Pi's backoff, and an overflow lowers the output cap once.
  * The cached prefix is the same in every attempt.
  */
@@ -212,14 +229,25 @@ export async function forkWithRetry(
 	payload: Payload,
 	signal: AbortSignal | undefined,
 	policy: RetryPolicy,
+	/** The same request with a stricter ask appended, for a reply with no usable summary. */
+	escalate?: (payload: Payload) => Payload | undefined,
 ): Promise<ForkResult & { attempts: number }> {
 	const sleep = policy.sleep ?? sleepFor;
 	let current = payload;
 	let lowered = false;
+	let escalated = false;
 	let retries = 0;
 	for (let attempts = 1; ; attempts++) {
 		const result = await requestFork(ctx, current, signal);
 		if (result.ok || signal?.aborted) return { ...result, attempts };
+		if (result.unusableSummary && !escalated && escalate) {
+			const next = escalate(current);
+			if (next) {
+				current = next;
+				escalated = true;
+				continue;
+			}
+		}
 		if (result.overflow && !lowered) {
 			const next = lowerOutputCap(current, OVERFLOW_CAP_CUT);
 			if (next) {

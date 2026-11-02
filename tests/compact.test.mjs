@@ -360,16 +360,50 @@ test("tools a codemode script called are listed, with file references rather tha
 	assert.ok(!result.compaction.summary.includes("const bug = 0;"));
 });
 
-test("unusable summaries cancel compaction without replacing history or adding model requests", async () => {
-	for (const text of ["<analysis>scratchpad only</analysis>", "<analysis>truncated", "I will fix it now.", "<summary> </summary>"]) {
-		const entries = conversation(), before = structuredClone(entries);
-		answered("s1");
-		const { ctx, seen } = fakeCtx({ entries, replies: [reply(text, "length")] });
-		assert.deepEqual(await compact.handleCompaction(event(entries), ctx, ON, NO_WAIT), { cancel: true }, text);
-		assert.deepEqual(entries, before, "the original branch remains intact");
-		assert.equal(seen.sent.length, 1, "no semantic retry or fallback algorithm");
-		assert.match(seen.notices[0].message, /non-empty <summary>/);
-	}
+test("an unusable reply is re-asked once, stricter; still unusable, Pi's own compaction runs", async () => {
+	const entries = conversation(), before = structuredClone(entries);
+	answered("s1");
+	const { ctx, seen } = fakeCtx({ entries, replies: [reply("<analysis>scratchpad only</analysis>", "length"), reply("<analysis>still no summary")] });
+	assert.equal(await compact.handleCompaction(event(entries), ctx, ON, NO_WAIT), undefined, "handed to Pi, not cancelled");
+	assert.deepEqual(entries, before, "the original branch remains intact");
+	assert.equal(seen.sent.length, 2, "one stricter re-ask, then no third request");
+	assert.deepEqual(seen.sent[1].messages.slice(0, -1), seen.sent[0].messages, "the same cached prefix");
+	assert.deepEqual(seen.sent[1].messages.at(-1), { role: "user", content: prompt.SUMMARY_ONLY_ASK });
+	assert.deepEqual(seen.notices, [], "nothing said before Pi redraws the transcript");
+	// The notice after Pi's compaction says whose it was and why, with both ends of the refused reply.
+	const notice = compact.compactionNotice("s1", { fromExtension: false, compactionEntry: { details: {} } });
+	assert.match(notice, /^Compacted by Pi's own compaction \u00b7 Summary reply did not contain a non-empty <summary>/);
+	assert.match(notice, /stop, 300 output tokens/);
+	assert.match(notice, /<analysis>still no summary/);
+});
+
+test("a summary cut off by the output cap says so, then Pi's compaction runs", async () => {
+	const entries = conversation();
+	answered("s1");
+	const { ctx, seen } = fakeCtx({ entries, replies: [reply("<analysis>still writing", "length"), reply("<analysis>still writing, again", "length")] });
+	assert.equal(await compact.handleCompaction(event(entries), ctx, ON, NO_WAIT), undefined);
+	assert.equal(seen.sent.length, 2);
+	const notice = compact.compactionNotice("s1", { fromExtension: false, compactionEntry: { details: {} } });
+	assert.match(notice, /cut off by the output limit before it contained a <summary> block/);
+	assert.match(notice, /length, 300 output tokens/);
+});
+
+test("an idle compaction handed to Pi is announced once: idle.ts's own line, not this package's", async () => {
+	const entries = conversation();
+	answered("s1");
+	const { ctx } = fakeCtx({ entries, replies: [reply("<analysis>only scratchpad"), reply("<analysis>still only scratchpad")] });
+	assert.equal(await compact.handleCompaction(event(entries), ctx, ON, NO_WAIT), undefined);
+	assert.equal(compact.compactionNotice("s1", { fromExtension: false, compactionEntry: { details: {} } }, { idle: true }), undefined);
+});
+
+test("a re-asked summary that is usable is stored by the fork", async () => {
+	const entries = conversation();
+	answered("s1");
+	const { ctx, seen } = fakeCtx({ entries, replies: [reply("I will fix it now."), reply("<summary>Re-asked facts</summary>")] });
+	const result = await compact.handleCompaction(event(entries), ctx, ON, NO_WAIT);
+	assert.equal(seen.sent.length, 2);
+	assert.equal(result.compaction.details.engine, "fork");
+	assert.ok(result.compaction.summary.includes("Summary:\nRe-asked facts"));
 });
 
 test("a useful partial summary is committed without leftover outer tags or scratchpad", async () => {

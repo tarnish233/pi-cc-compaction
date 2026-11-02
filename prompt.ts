@@ -1,5 +1,6 @@
 /**
- * The model-facing text of a compaction, taken from Claude Code 2.1.308.
+ * The model-facing text of a compaction, taken from Claude Code 2.1.308, with
+ * the reply read the way 2.1.316 reads it (no guessing about fences or quotes).
  *
  * Claude Code picks its summary prompt from eight experiment arms
  * (tengu_curried_trinket); "control" is the default and the one used here: an
@@ -40,45 +41,48 @@ export function summaryRequest(customInstructions?: string): string {
 	return text + reminder(SUMMARY_REPLY_SHAPE);
 }
 
-const ANALYSIS_BLOCK = /<analysis>[\s\S]*?<\/analysis>/g;
-const REPLY_TAG = /<\/?(?:analysis|summary)>/g;
-// Protocol tags quoted in prose or code are examples, not block delimiters.
-const LITERAL_SPAN = /(`+)[\s\S]*?\1|(?<![\w])"(?:\\.|[^"\\\n])*"|(?<![\w])'(?:\\.|[^'\\\n])*'|“[^”\n]*”|‘[^’\n]*’/g;
+/**
+ * The second ask, after a reply that arrived without a usable <summary>: the
+ * same request, said shorter and stricter. Only the appended turn differs, so
+ * it still reads the cache of the request before it.
+ */
+export const SUMMARY_ONLY_ASK =
+	"Write the summary again as plain text only, with no tool calls: nothing before <summary> and no code fence around it. The summary itself goes between <summary> and </summary>.";
+
+// Claude Code's own reply parsing (2.1.316, its `K9e`/`xsn`/`ITe`): the first
+// <analysis> block is dropped, then the <summary> body is read. Nothing here
+// reasons about quotes or code fences - a reply that quotes the protocol is the
+// model's mistake, and Claude Code stores that quote too.
+const ANALYSIS_BLOCK = /<analysis>[\s\S]*?<\/analysis>/;
+const SUMMARY_BLOCK = /<summary>([\s\S]*?)<\/summary>/;
+/** A summary whose closing tag the output cap cut off, which Claude Code accepts too. */
+const OPEN_SUMMARY = /^[ \t]*<summary>/m;
 
 export const INVALID_SUMMARY = "Summary reply did not contain a non-empty <summary> block.";
+/** Claude Code's shape was not met because the output cap stopped the reply first. */
+export const SUMMARY_TRUNCATED = "Summary reply was cut off by the output limit before it contained a <summary> block.";
 
-/** A real summary outside the scratchpad; a non-empty unfinished block is still useful. */
+/**
+ * Claude Code's extraction: drop the first scratchpad, then use the <summary>
+ * body - or what follows an unclosed <summary> (a reply the output cap cut off),
+ * which Claude Code treats as a summary too. Undefined for prose, a scratchpad
+ * only, an empty block, or nothing at all. Claude Code stores the whole stripped
+ * reply and only labels the block; the block's body alone is stored here, so a
+ * reply that quotes the format keeps nothing around the quote.
+ */
 export function extractSummary(reply: string): string | undefined {
-	let analysisDepth = 0;
-	let summaryDepth = 0;
-	let start: number | undefined;
-	const literals = [...reply.matchAll(LITERAL_SPAN)].map((match) => ({ start: match.index, end: match.index + match[0].length }));
-	let literalIndex = 0;
-	const usable = (body: string): string | undefined => {
-		const text = body.trim();
-		const content = text.replace(ANALYSIS_BLOCK, "").replace(/<\/?summary>/g, "").replace(/<[^>]*$/, "").trim();
-		return content && !content.startsWith("<analysis>") ? text : undefined;
-	};
-	for (const match of reply.matchAll(REPLY_TAG)) {
-		while (literals[literalIndex]?.end <= match.index) literalIndex++;
-		if (literals[literalIndex]?.start <= match.index) continue;
-		const tag = match[0];
-		if (start !== undefined) {
-			if (tag === "<summary>") summaryDepth++;
-			if (tag === "</summary>" && --summaryDepth === 0) return usable(reply.slice(start, match.index));
-			continue;
-		}
-		if (tag === "<analysis>") analysisDepth++;
-		else if (tag === "</analysis>") analysisDepth = Math.max(0, analysisDepth - 1);
-		else if (tag === "<summary>" && analysisDepth === 0) {
-			start = match.index + tag.length;
-			summaryDepth = 1;
-		}
-	}
-	return start === undefined ? undefined : usable(reply.slice(start));
+	const text = reply.replace(ANALYSIS_BLOCK, "");
+	const closed = SUMMARY_BLOCK.exec(text);
+	if (closed) return closed[1].trim() || undefined;
+	const open = OPEN_SUMMARY.exec(text);
+	if (open === null) return undefined;
+	// A cut-off reply: drop a tag left unfinished at the end (never a "< 4096" in
+	// prose), and a scratchpad that started inside the summary instead of a summary.
+	const body = text.slice(open.index + open[0].length).replace(/<[a-zA-Z/][^>]*$/, "").trim();
+	return body && !body.startsWith("<analysis>") ? body : undefined;
 }
 
-/** Drop the scratchpad, normalize complete or useful partial summaries, squeeze blank lines. */
+/** Claude Code's formatting: label the summary and squeeze blank lines. */
 export function formatSummary(reply: string): string {
 	const body = extractSummary(reply);
 	return body === undefined ? "" : `Summary:\n${body}`.replace(/\n\n+/g, "\n\n");
