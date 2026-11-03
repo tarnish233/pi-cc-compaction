@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.2.13] - 2026-11-03
+
 ### Added
 - `tests/pi-internals.test.mjs` fails when a Pi release renames an internal the patches wrap (`SettingsManager.getCompactionSettings`, `ExtensionRunner.emitBeforeProviderRequest`, `ExtensionRunner.invalidate`), instead of quietly falling back to Pi's compaction thresholds.
 
