@@ -326,6 +326,9 @@ async function openSettingsPanel(ctx: ExtensionCommandContext, apply: ApplySetti
 				tui.requestRender();
 			},
 		};
+	}, {
+		// Inline screen: tell the terminal (OSC 7501) Pi is waiting on the user.
+		blocked: { kind: "question", message: "Changing extension settings" },
 	});
 	return true;
 }
