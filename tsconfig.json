@@ -8,23 +8,7 @@
 		"noEmit": true,
 		"skipLibCheck": true,
 		"allowImportingTsExtensions": true,
-		"types": ["node"],
-		"typeRoots": ["/Users/fulei/.pi/agent/install/releases/1.3.0/node_modules/@types"],
-		"baseUrl": ".",
-		"paths": {
-			"@earendil-works/pi-coding-agent": [
-				"/Users/fulei/.pi/agent/install/releases/1.3.0/node_modules/@earendil-works/pi-coding-agent/dist/index.d.ts"
-			],
-			"@earendil-works/pi-tui": [
-				"/Users/fulei/.pi/agent/install/releases/1.3.0/node_modules/@earendil-works/pi-tui/dist/index.d.ts"
-			],
-			"@earendil-works/pi-ai": [
-				"/Users/fulei/.pi/agent/install/releases/1.3.0/node_modules/@earendil-works/pi-ai/dist/index.d.ts"
-			],
-			"typebox": [
-				"/Users/fulei/.pi/agent/install/releases/1.3.0/node_modules/typebox/build/index.d.mts"
-			]
-		}
+		"types": ["node"]
 	},
 	"include": ["*.ts"]
 }

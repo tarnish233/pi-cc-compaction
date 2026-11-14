@@ -2,6 +2,13 @@
 
 ## [Unreleased]
 
+## [0.2.15] - 2026-11-14
+
+### Changed
+- Show only loaded-package settings pages in `/pi_cc`; standalone Compaction no longer displays irrelevant Loop/Monitor or Plugins controls. Text commands remain compatible and unrelated stored values are preserved.
+- Scope shared command ownership and capabilities to each Pi runtime, including safe reloads and mixed-version registry upgrades. Compaction thresholds, triggers and lifecycle are unchanged.
+- Replace hard-coded Pi 1.3.0 typecheck paths with portable local peer/Pi release discovery and optional `PI_AGENT_DIR` / `PI_TYPESCRIPT_PATH` overrides.
+
 ## [0.2.14] - 2026-11-14
 
 ### Changed

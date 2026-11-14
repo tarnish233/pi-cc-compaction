@@ -11,23 +11,23 @@
  * Pi's /settings cannot take items from an extension (its panel is a fixed
  * list, and the command is handled before extension commands), so /pi_cc
  * opens its own, laid out like pi-cc-extensions' /ccstyle: one page per
- * plugin, a tab bar on top (Tab and Shift+Tab switch pages), and on each page
+ * loaded plugin, a tab bar on top (Tab and Shift+Tab switch pages), and on each page
  * Pi's SettingsList with the selected setting's description below it.
  * Enter/Space changes a value; a change is saved at once and Esc closes.
  * Message style and the footer summary serve pi-cc-loop and pi-cc-monitor
  * alike, so the two share a page. A setting that an environment variable
  * overrides shows the value in effect and cannot be changed here; its
- * description names the variable. Outside the TUI, /pi_cc prints the summary,
- * page by page.
+ * description names the variable. Outside the TUI, /pi_cc prints the summary
+ * for the same loaded-package pages.
  *
- * Only one /pi_cc exists however many pi-cc packages are installed: Pi turns
- * same-named commands from different extensions into /pi_cc:1 and /pi_cc:2,
- * and plain /pi_cc then matches neither. The first pi-cc package to load
- * claims the command on a global symbol (extensions share one process), and
- * releases the claim at session shutdown, so /reload and pi-config changes
- * run the race again. The claim holds the owner's name, so a package
- * re-loading over its own claim re-claims it. The API offers no other way:
- * getCommands() cannot be called during loading.
+ * Only one /pi_cc exists per session however many pi-cc packages are installed:
+ * Pi turns same-named commands from different extensions into /pi_cc:1 and
+ * /pi_cc:2, and plain /pi_cc then matches neither. The first package claims the
+ * command through the session's event bus and releases the claim at shutdown.
+ * The bus is shared by extension facades in one runtime but isolated between
+ * independent SDK sessions, unlike a process-global symbol. The claim holds
+ * live owner tokens, so a package re-loading over its own claim can re-register
+ * without letting an older instance release a newer one's ownership.
  */
 
 import type { ExtensionAPI, ExtensionCommandContext, ExtensionContext } from "@earendil-works/pi-coding-agent";
@@ -39,8 +39,48 @@ import { configPath, DEFAULT_CONFIG, envOverride, loadConfig, saveConfig, type P
 /** Saved settings travel between the packages on this channel. */
 export const CONFIG_CHANNEL = "pi-cc:config";
 
-/** One /pi_cc per session: the first pi-cc package to load claims the name. */
-const SLASH_CLAIM = Symbol.for("pi-cc:slash-command");
+/** Synchronous per-runtime discovery, the same pattern used by the shared /tasks panel. */
+const SETTINGS_PROBE_CHANNEL = "pi-cc:settings:probe";
+
+interface SettingsRegistry {
+	/** Live command-owner token -> package name. Only one package name may claim a runtime. */
+	owners: Map<object, string>;
+	/** Every loaded package, including packages that did not win the command. */
+	packages: Map<object, string>;
+	probeListener?: () => void;
+	disposed: boolean;
+}
+
+interface SettingsProbe {
+	reply(registry: SettingsRegistry): void;
+}
+
+function findSettingsRegistry(pi: ExtensionAPI): SettingsRegistry | undefined {
+	let found: SettingsRegistry | undefined;
+	try {
+		pi.events.emit(SETTINGS_PROBE_CHANNEL, {
+			reply: (registry: SettingsRegistry) => {
+				if (!found && registry && !registry.disposed) found = registry;
+			},
+		} satisfies SettingsProbe);
+	} catch {
+		// A missing bus only means this package stands alone.
+	}
+	return found;
+}
+
+function disposeSettingsRegistry(registry: SettingsRegistry): void {
+	if (registry.disposed) return;
+	registry.disposed = true;
+	registry.owners.clear();
+	registry.packages?.clear();
+	try {
+		registry.probeListener?.();
+	} catch {
+		// the runtime may already have unsubscribed it
+	}
+	registry.probeListener = undefined;
+}
 
 /** The part of Pi's theme the panel uses. */
 export interface PanelTheme {
@@ -135,6 +175,16 @@ const PAGES: SettingsPage[] = [
 
 const SETTINGS: SettingSpec[] = PAGES.flatMap((page) => page.settings);
 
+function pagesForPackages(packages: ReadonlySet<string>): SettingsPage[] {
+	const pages = PAGES.filter((page) => {
+		if (page.label === "Loop & Monitor") return packages.has("pi-cc-loop") || packages.has("pi-cc-monitor");
+		if (page.label === "Plugins") return packages.has("pi-cc-plugins");
+		if (page.label === "Compact") return packages.has("pi-cc-compaction");
+		return true;
+	});
+	return pages.length ? pages : PAGES;
+}
+
 /** Labels padded to one width, so the values stay in one column from page to page. */
 const LABEL_WIDTH = Math.max(...SETTINGS.map((spec) => spec.label.length));
 
@@ -181,6 +231,8 @@ function item(spec: SettingSpec): SettingItem {
 
 export interface SettingsPanelOptions {
 	theme: PanelTheme;
+	/** Loaded-package pages supplied by /pi_cc; direct callers default to all pages. */
+	pages?: SettingsPage[];
 	/** Where the settings are saved, shown in the title. */
 	file: string;
 	/** Save one setting (and tell the other packages). */
@@ -195,6 +247,7 @@ export interface SettingsPanel {
 }
 
 const HINT = "  Enter/Space to change \u00b7 Tab/Shift+Tab to switch pages \u00b7 Esc to close";
+const SINGLE_PAGE_HINT = "  Enter/Space to change \u00b7 Esc to close";
 
 function isNextPageKey(data: string): boolean {
 	return data === "\t" || matchesKey(data, "tab");
@@ -207,7 +260,8 @@ function isPreviousPageKey(data: string): boolean {
 
 export function settingsPanel(options: SettingsPanelOptions): SettingsPanel {
 	const { theme } = options;
-	const lists = PAGES.map((page) => {
+	const pages = options.pages?.length ? options.pages : PAGES;
+	const lists = pages.map((page) => {
 		const list: SettingsList = new SettingsList(
 			page.settings.map(item),
 			page.settings.length,
@@ -227,7 +281,7 @@ export function settingsPanel(options: SettingsPanelOptions): SettingsPanel {
 
 	const rule = (width: number) => theme.fg("dim", "\u2500".repeat(Math.max(0, width)));
 	const tabBar = (width: number) => {
-		const tabs = PAGES.map((page, index) =>
+		const tabs = pages.map((page, index) =>
 			index === active ? theme.fg("text", theme.bold(page.label)) : theme.fg("dim", page.label),
 		).join(theme.fg("dim", " / "));
 		// The file the settings are saved in, on the right when it fits.
@@ -247,14 +301,15 @@ export function settingsPanel(options: SettingsPanelOptions): SettingsPanel {
 	return {
 		render: (width) => {
 			const safe = Math.max(0, Math.floor(width));
-			return [rule(safe), tabBar(safe), rule(safe), ...body(safe), rule(safe), truncateToWidth(theme.fg("dim", HINT), safe), rule(safe)];
+			const hint = pages.length > 1 ? HINT : SINGLE_PAGE_HINT;
+			return [rule(safe), tabBar(safe), rule(safe), ...body(safe), rule(safe), truncateToWidth(theme.fg("dim", hint), safe), rule(safe)];
 		},
 		invalidate: () => {
 			for (const list of lists) list.invalidate();
 		},
 		handleInput: (data) => {
-			if (isNextPageKey(data)) active = (active + 1) % PAGES.length;
-			else if (isPreviousPageKey(data)) active = (active - 1 + PAGES.length) % PAGES.length;
+			if (pages.length > 1 && isNextPageKey(data)) active = (active + 1) % pages.length;
+			else if (pages.length > 1 && isPreviousPageKey(data)) active = (active - 1 + pages.length) % pages.length;
 			else lists[active].handleInput(data);
 		},
 	};
@@ -286,9 +341,10 @@ function commandWord(field: keyof PiCcConfig): string {
  * The summary a non-TUI /pi_cc prints, generated from the same pages the panel
  * draws: a setting added to PAGES cannot go missing here.
  */
-function showSettings(ctx: ExtensionContext): void {
+function showSettings(ctx: ExtensionContext, pages = PAGES): void {
 	const lines = [`pi-cc settings \u00b7 ${configPath()}`];
-	for (const page of PAGES) {
+	const settings = pages.flatMap((page) => page.settings);
+	for (const page of pages) {
 		lines.push(page.label);
 		for (const spec of page.settings) {
 			const value = settingValue(spec);
@@ -297,7 +353,7 @@ function showSettings(ctx: ExtensionContext): void {
 	}
 	lines.push(
 		"",
-		`Usage: /pi_cc <item> <value>  (${SETTINGS.map((spec) => commandWord(spec.field)).join(", ")})`,
+		`Usage: /pi_cc <item> <value>  (${settings.map((spec) => commandWord(spec.field)).join(", ")})`,
 	);
 	notify(ctx, lines.join("\n"), "info");
 }
@@ -310,11 +366,12 @@ type ApplySetting = (field: keyof PiCcConfig, value: string) => PiCcConfig;
  * cannot add to. Resolves when the panel closes; false when there is no TUI
  * to show it in, so the caller prints the summary instead.
  */
-async function openSettingsPanel(ctx: ExtensionCommandContext, apply: ApplySetting): Promise<boolean> {
+async function openSettingsPanel(ctx: ExtensionCommandContext, apply: ApplySetting, pages = PAGES): Promise<boolean> {
 	if (ctx.mode !== "tui" || typeof ctx.ui.custom !== "function") return false;
 	await ctx.ui.custom<void>((tui, theme, _keybindings, done) => {
 		const panel = settingsPanel({
 			theme,
+			pages,
 			file: configPath(),
 			onChange: (field, value) => {
 				apply(field, value);
@@ -353,15 +410,15 @@ const KEYS: Record<string, { field: keyof PiCcConfig; label: string }> = {
 	idle: { field: "idleCompaction", label: "Idle compaction" },
 };
 
-function setSetting(ctx: ExtensionContext, apply: ApplySetting, key: string, raw: string | undefined): void {
+function setSetting(ctx: ExtensionContext, apply: ApplySetting, key: string, raw: string | undefined, pages = PAGES): void {
 	const spec = KEYS[key];
 	if (!spec) {
-		showSettings(ctx);
+		showSettings(ctx, pages);
 		return;
 	}
 	const setting = SETTINGS.find((candidate) => candidate.field === spec.field);
 	if (!setting || raw === undefined) {
-		showSettings(ctx);
+		showSettings(ctx, pages);
 		return;
 	}
 	const input = raw.trim().toLowerCase();
@@ -369,7 +426,7 @@ function setSetting(ctx: ExtensionContext, apply: ApplySetting, key: string, raw
 		: input === "off" || input === "false" || input === "0" ? setting.off
 		: undefined;
 	if (value === undefined) {
-		showSettings(ctx);
+		showSettings(ctx, pages);
 		return;
 	}
 	const field = spec.field;
@@ -384,17 +441,45 @@ function setSetting(ctx: ExtensionContext, apply: ApplySetting, key: string, raw
 }
 
 /**
- * Register /pi_cc on behalf of one pi-cc package. The first package to load
- * wins; the others leave the command to it, so there is never a /pi_cc:2.
+ * Register /pi_cc on behalf of one pi-cc package. The first package in this
+ * runtime wins; independent sessions have independent buses and each get the
+ * command. A same-package reload may register alongside its previous instance.
  */
 export function registerPiCcCommand(pi: ExtensionAPI, owner: string): void {
-	const claims = globalThis as typeof globalThis & Record<symbol, string | undefined>;
-	if (claims[SLASH_CLAIM] !== undefined && claims[SLASH_CLAIM] !== owner) return;
-	claims[SLASH_CLAIM] = owner;
-	// Release the name when this session ends, so /reload re-runs the race.
+	let registry = findSettingsRegistry(pi);
+	if (!registry) {
+		const created: SettingsRegistry = { owners: new Map(), packages: new Map(), disposed: false };
+		registry = created;
+		created.probeListener = pi.events.on(SETTINGS_PROBE_CHANNEL, (data) => {
+			if (created.disposed) return;
+			try {
+				(data as SettingsProbe | undefined)?.reply?.(created);
+			} catch {
+				// a broken prober must not affect the registry
+			}
+		});
+	}
+	// A mixed-version runtime may have created the registry before package
+	// capabilities existed. Preserve its owner information while upgrading it.
+	const packages = registry.packages ??= new Map();
+	for (const packageName of registry.owners.values()) {
+		if (![...packages.values()].includes(packageName)) packages.set({}, packageName);
+	}
+	const capabilityToken = {};
+	packages.set(capabilityToken, owner);
+	const claimedBy = new Set(registry.owners.values());
+	const canOwn = claimedBy.size === 0 || claimedBy.has(owner);
+	const token = canOwn ? {} : undefined;
+	if (token) registry.owners.set(token, owner);
 	pi.on("session_shutdown", () => {
-		if (claims[SLASH_CLAIM] === owner) claims[SLASH_CLAIM] = undefined;
+		registry.packages.delete(capabilityToken);
+		if (!token) return;
+		registry.owners.delete(token);
+		// Same-owner instances may overlap during reload. The last live token
+		// releases discovery; one instance can never release another's claim.
+		if (!registry.owners.size) disposeSettingsRegistry(registry);
 	});
+	if (!canOwn) return;
 
 	const applySetting: ApplySetting = (field, value) => {
 		const setting = SETTINGS.find((candidate) => candidate.field === field);
@@ -412,20 +497,21 @@ export function registerPiCcCommand(pi: ExtensionAPI, owner: string): void {
 	pi.registerCommand("pi_cc", {
 		description: "pi-cc settings: message style, footer, draft, turn summary, CC keys, compaction",
 		handler: async (args: string, ctx: ExtensionCommandContext) => {
+			const pages = pagesForPackages(new Set(registry.packages.values()));
 			const words = args.trim().split(/\s+/).filter(Boolean);
 			// "/pi_cc settings footer on" reads like the old /loop settings: drop the noun.
 			if (words[0] === "settings" || words[0] === "config") words.shift();
 			if (words.length === 0) {
-				if (!(await openSettingsPanel(ctx, applySetting))) showSettings(ctx);
+				if (!(await openSettingsPanel(ctx, applySetting, pages))) showSettings(ctx, pages);
 				return;
 			}
 			// "/pi_cc help", or a word that is not a setting: the summary says what is.
 			const key = words[0].toLowerCase();
 			if (key === "help" || !KEYS[key]) {
-				showSettings(ctx);
+				showSettings(ctx, pages);
 				return;
 			}
-			setSetting(ctx, applySetting, key, words[1]);
+			setSetting(ctx, applySetting, key, words[1], pages);
 		},
 	});
 }

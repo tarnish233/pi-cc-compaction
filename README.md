@@ -138,8 +138,10 @@ Claude Code 则在原会话上分叉：system prompt、工具、消息、思考�
 
 ```bash
 node --test tests/*.test.mjs
-npx --yes -p typescript@5.9.3 tsc --noEmit -p tsconfig.json
+npm run typecheck
 ```
+
+类型检查使用本地 TypeScript 开发依赖，并自动定位本地 peer dependencies 或当前安装的 Pi release；可用 `PI_AGENT_DIR` 选择隔离安装，用 `PI_TYPESCRIPT_PATH` 指向已有的 `typescript/lib/typescript.js`。
 
 测试加载真实的 Pi 模块（在 Pi 自己的 `SettingsManager`、`ExtensionRunner` 上安装补丁，用 Pi 的 `SettingsManager` 读写临时目录里的 `settings.json`）。
 测别的 Pi 版本时，把 `PI_AGENT_DIR` 指到只装了那个版本的目录（`<dir>/install/releases/<version>`）。测试不读写真实的 `~/.pi/agent`。
