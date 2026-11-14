@@ -34,7 +34,7 @@ import type { ExtensionAPI, ExtensionCommandContext, ExtensionContext } from "@e
 import { matchesKey, SettingsList, truncateToWidth, visibleWidth, type SettingItem, type SettingsListTheme } from "@earendil-works/pi-tui";
 import os from "node:os";
 import path from "node:path";
-import { configPath, envOverride, loadConfig, saveConfig, type PiCcConfig } from "./config.ts";
+import { configPath, DEFAULT_CONFIG, envOverride, loadConfig, saveConfig, type PiCcConfig } from "./config.ts";
 
 /** Saved settings travel between the packages on this channel. */
 export const CONFIG_CHANNEL = "pi-cc:config";
@@ -79,7 +79,7 @@ const PAGES: SettingsPage[] = [
 				label: "Footer summary",
 				on: "on",
 				off: "off",
-				description: "One line in Pi's footer while loops or monitors run: loop 2 \u00b7 next 3m, monitor 2.",
+				description: "One line in Pi's footer while loops or monitors run: 1 loop \u00b7 next 3m, 2 monitors.",
 			},
 		],
 	},
@@ -159,8 +159,12 @@ function displayPath(file: string): string {
 	return file === home || file.startsWith(home + path.sep) ? `~${file.slice(home.length)}` : file;
 }
 
+function settingValue(spec: SettingSpec): string {
+	return loadConfig()[spec.field] ? spec.on : spec.off;
+}
+
 function item(spec: SettingSpec): SettingItem {
-	const value = loadConfig()[spec.field] ? spec.on : spec.off;
+	const value = settingValue(spec);
 	const override = envOverride(spec.field);
 	const label = spec.label.padEnd(LABEL_WIDTH);
 	if (override) {
@@ -180,7 +184,7 @@ export interface SettingsPanelOptions {
 	/** Where the settings are saved, shown in the title. */
 	file: string;
 	/** Save one setting (and tell the other packages). */
-	onChange(field: keyof PiCcConfig, value: boolean): void;
+	onChange(field: keyof PiCcConfig, value: string): void;
 	onClose(): void;
 }
 
@@ -211,9 +215,9 @@ export function settingsPanel(options: SettingsPanelOptions): SettingsPanel {
 			(id, value) => {
 				const spec = page.settings.find((candidate) => candidate.field === id);
 				if (!spec) return;
-				options.onChange(spec.field, value === spec.on);
+				options.onChange(spec.field, value);
 				// Show what is in effect now.
-				list.updateValue(id, loadConfig()[spec.field] ? spec.on : spec.off);
+				list.updateValue(id, settingValue(spec));
 			},
 			() => options.onClose(),
 		);
@@ -283,24 +287,23 @@ function commandWord(field: keyof PiCcConfig): string {
  * draws: a setting added to PAGES cannot go missing here.
  */
 function showSettings(ctx: ExtensionContext): void {
-	const config = loadConfig();
 	const lines = [`pi-cc settings \u00b7 ${configPath()}`];
 	for (const page of PAGES) {
 		lines.push(page.label);
 		for (const spec of page.settings) {
-			const value = config[spec.field] ? spec.on : spec.off;
+			const value = settingValue(spec);
 			lines.push(`  ${commandWord(spec.field)}:`.padEnd(13) + value + overrideNote(spec.field));
 		}
 	}
 	lines.push(
 		"",
-		`Usage: /pi_cc <item> on|off  (${SETTINGS.map((spec) => commandWord(spec.field)).join(", ")})`,
+		`Usage: /pi_cc <item> <value>  (${SETTINGS.map((spec) => commandWord(spec.field)).join(", ")})`,
 	);
 	notify(ctx, lines.join("\n"), "info");
 }
 
 /** Save one setting and tell every pi-cc package; each repaints itself. Returns the settings in effect. */
-type ApplySetting = (field: keyof PiCcConfig, on: boolean) => PiCcConfig;
+type ApplySetting = (field: keyof PiCcConfig, value: string) => PiCcConfig;
 
 /**
  * A bare /pi_cc in the TUI: a panel like Pi's /settings, which extensions
@@ -356,21 +359,27 @@ function setSetting(ctx: ExtensionContext, apply: ApplySetting, key: string, raw
 		showSettings(ctx);
 		return;
 	}
-	const value = (raw ?? "").toLowerCase();
-	const on = value === "on" || value === "true" || value === "1";
-	const off = value === "off" || value === "false" || value === "0";
-	if (!on && !off) {
+	const setting = SETTINGS.find((candidate) => candidate.field === spec.field);
+	if (!setting || raw === undefined) {
+		showSettings(ctx);
+		return;
+	}
+	const input = raw.trim().toLowerCase();
+	const value = input === "on" || input === "true" || input === "1" ? setting.on
+		: input === "off" || input === "false" || input === "0" ? setting.off
+		: undefined;
+	if (value === undefined) {
 		showSettings(ctx);
 		return;
 	}
 	const field = spec.field;
-	const next = apply(field, on);
+	const next = apply(field, value);
 	const override = envOverride(field);
-	if (override && next[field] !== on) {
+	if (override && settingValue(setting) !== value) {
 		// The file has the choice, but the variable decides while it is set.
-		notify(ctx, `${spec.label} saved as ${on ? "on" : "off"}, but ${override} overrides it while set`, "warning");
+		notify(ctx, `${spec.label} saved as ${value}, but ${override} overrides it while set`, "warning");
 	} else {
-		notify(ctx, `${spec.label} ${on ? "enabled" : "disabled"}`, "info");
+		notify(ctx, `${spec.label} ${value === setting.on ? "enabled" : "disabled"}`, "info");
 	}
 }
 
@@ -387,8 +396,10 @@ export function registerPiCcCommand(pi: ExtensionAPI, owner: string): void {
 		if (claims[SLASH_CLAIM] === owner) claims[SLASH_CLAIM] = undefined;
 	});
 
-	const applySetting: ApplySetting = (field, on) => {
-		const patch: Partial<PiCcConfig> = { [field]: on };
+	const applySetting: ApplySetting = (field, value) => {
+		const setting = SETTINGS.find((candidate) => candidate.field === field);
+		const stored = value === setting?.on;
+		const patch = { [field]: stored } as Partial<PiCcConfig>;
 		const next = saveConfig(patch);
 		try {
 			pi.events.emit(CONFIG_CHANNEL, next);

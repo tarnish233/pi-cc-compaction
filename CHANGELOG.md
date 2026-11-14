@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+## [0.2.14] - 2026-11-14
+
+### Changed
+- Synchronize shared pi-cc settings with Monitor and Loop: normalize panel/CLI values while preserving stored booleans, environment overrides and cross-package updates.
+- Align the shared footer description with count-first labels; compaction thresholds, triggers and lifecycle are unchanged.
+
 ## [0.2.13] - 2026-11-03
 
 ### Added

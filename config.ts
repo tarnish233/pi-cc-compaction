@@ -18,8 +18,8 @@
  *     "idleCompaction": true
  *   }
  *
- * compactMessages and footer drive loop and monitor; draft, turnSummary and
- * ccKeys drive pi-cc-plugins; compaction and idleCompaction drive pi-cc-compaction. A package that is not installed simply ignores its
+ * compactMessages and footer drive loop and monitor;
+ * draft, turnSummary and ccKeys drive pi-cc-plugins; compaction and idleCompaction drive pi-cc-compaction. A package that is not installed simply ignores its
  * keys, and they are kept as the user left them.
  *
  * Environment overrides (useful for tests and quick experiments) win over the
@@ -89,11 +89,7 @@ function envBool(name: string): boolean | undefined {
 	return undefined;
 }
 
-/** The variable overriding a setting right now, as `PI_CC_FOOTER=0`; undefined when none is. */
-export function envOverride(key: keyof PiCcConfig): string | undefined {
-	const name = ENV_OVERRIDES[key];
-	return envBool(name) === undefined ? undefined : `${name}=${process.env[name]}`;
-}
+
 
 /** The settings file shared by the pi-cc packages, in Pi's agent directory. */
 export function configPath(): string {
@@ -101,9 +97,15 @@ export function configPath(): string {
 	return path.join(getAgentDir(), "pi-cc.json");
 }
 
-/** One setting: an environment override, else the file's boolean, else the default. */
-function readSetting(file: Partial<PiCcConfig>, key: keyof PiCcConfig): boolean {
+/** One setting: an environment override, else the file's valid value, else the default. */
+function readSetting(file: Partial<PiCcConfig>, key: keyof PiCcConfig): PiCcConfig[keyof PiCcConfig] {
 	return envBool(ENV_OVERRIDES[key]) ?? (typeof file[key] === "boolean" ? (file[key] as boolean) : DEFAULT_CONFIG[key]);
+}
+
+/** The variable overriding a setting right now, as `PI_CC_FOOTER=0`; undefined when none is. */
+export function envOverride(key: keyof PiCcConfig): string | undefined {
+	const name = ENV_OVERRIDES[key];
+	return envBool(name) === undefined ? undefined : `${name}=${process.env[name]}`;
 }
 
 function readConfig(): PiCcConfig {
@@ -117,7 +119,9 @@ function readConfig(): PiCcConfig {
 	// One loop over the defaults, so a setting added to DEFAULT_CONFIG is read
 	// without a second edit here.
 	const config = { ...DEFAULT_CONFIG };
-	for (const key of Object.keys(config) as Array<keyof PiCcConfig>) config[key] = readSetting(file, key);
+	for (const key of Object.keys(config) as Array<keyof PiCcConfig>) {
+		(config as unknown as Record<string, unknown>)[key] = readSetting(file, key);
+	}
 	return config;
 }
 
