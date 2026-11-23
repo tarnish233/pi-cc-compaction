@@ -2,6 +2,16 @@
 
 ## [Unreleased]
 
+## [0.2.17] - 2026-11-23
+
+### Fixed
+- Resolve an installed Pi by its `import` export in the release check: the packages export no CommonJS entry, so `require.resolve` alone found nothing on a clean CI runner.
+
+## [0.2.17] - 2026-11-23
+
+### Fixed
+- Resolve an installed Pi by its `import` export in the release check: the packages export no CommonJS entry, so `require.resolve` alone found nothing on a clean CI runner.
+
 ## [0.2.16] - 2026-11-23
 
 ### Fixed

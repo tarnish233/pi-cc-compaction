@@ -2,8 +2,22 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { createRequire } from "node:module";
+import { fileURLToPath } from "node:url";
 
 const require = createRequire(import.meta.url);
+
+/** Resolve an installed peer. The packages export only `import`, so require.resolve alone fails. */
+function resolvePeer(name) {
+	try {
+		return fileURLToPath(import.meta.resolve(name));
+	} catch {
+		try {
+			return require.resolve(name);
+		} catch {
+			return undefined;
+		}
+	}
+}
 
 function pathsFor(root, versions) {
 	return {
@@ -22,7 +36,8 @@ export function findPiInstall() {
 	const override = process.env.PI_AGENT_DIR ?? process.env.PI_CODING_AGENT_DIR;
 	if (!override) {
 		try {
-			const entry = require.resolve("@earendil-works/pi-coding-agent");
+			const entry = resolvePeer("@earendil-works/pi-coding-agent");
+			if (!entry) throw new Error("not installed");
 			const root = path.resolve(path.dirname(entry), "..", "..", "..");
 			const manifest = JSON.parse(fs.readFileSync(path.resolve(path.dirname(entry), "..", "package.json"), "utf8"));
 			const install = pathsFor(root, [manifest.version]);
