@@ -41,7 +41,7 @@ import os from "node:os";
 import path from "node:path";
 
 export interface PiCcConfig {
-	/** Two-line marker blocks instead of the padded card. */
+	/** One-line notifications with expandable details instead of the legacy padded card. */
 	compactMessages: boolean;
 	/**
 	 * Show a one-line summary in Pi's footer (loops armed, monitors running).
@@ -52,7 +52,7 @@ export interface PiCcConfig {
 	draft: boolean;
 	/** pi-cc-plugins: one line closes every agent run. */
 	turnSummary: boolean;
-	/** pi-cc-plugins: Enter queues while Pi works; no Ctrl+Enter shortcut. */
+	/** pi-cc-plugins: Up recalls a queued message; Down puts the prompt back. */
 	ccKeys: boolean;
 	/** pi-cc-compaction: Claude Code's compaction replaces Pi's summary request. */
 	compaction: boolean;
@@ -218,8 +218,10 @@ export function saveConfig(patch: Partial<PiCcConfig>): PiCcConfig {
 		try {
 			const parsed = JSON.parse(fs.readFileSync(file, "utf8")) as unknown;
 			if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) raw = parsed as Record<string, unknown>;
-		} catch {
-			// A missing or malformed file is rewritten from scratch.
+		} catch (error) {
+			// A missing or malformed file is rewritten from scratch; a file we
+			// cannot read (EACCES/EIO) must not be, or its keys would be lost.
+			if ((error as NodeJS.ErrnoException).code !== "ENOENT" && !(error instanceof SyntaxError)) throw error;
 		}
 		const temp = `${file}.${process.pid}.${randomUUID()}.tmp`;
 		try {

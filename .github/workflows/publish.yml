@@ -6,10 +6,30 @@ on:
       tag:
         description: "Tag to publish, for example v0.1.0"
         required: true
-        default: "v0.2.15"
+        default: "v0.2.16"
 
 jobs:
+  check:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Install validation dependencies
+        run: npm install --ignore-scripts --no-save --package-lock=false @earendil-works/pi-coding-agent@1.6.0 @earendil-works/pi-ai@1.6.0 @earendil-works/pi-tui@1.6.0
+
+      - run: npm test
+      - run: npm run typecheck
+
   publish:
+    needs: check
     runs-on: ubuntu-latest
     permissions:
       contents: read

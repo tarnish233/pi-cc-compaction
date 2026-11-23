@@ -1,43 +1,29 @@
-import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { findPiInstall as findHost } from "../scripts/host-paths.mjs";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 export const extensionDir = path.resolve(here, "..");
 
-/**
- * Locate the Pi installation that ships the extension host and jiti. Set
- * PI_AGENT_DIR to test against another one (e.g. a directory whose
- * install/releases holds only 1.3.0).
- */
-export function findPiInstall() {
-	const agentDir = process.env.PI_AGENT_DIR ?? path.join(os.homedir(), ".pi", "agent");
-	const releases = path.join(agentDir, "install", "releases");
-	const candidates = fs.existsSync(releases) ? fs.readdirSync(releases) : [];
-	const versions = candidates
-		.filter((name) => fs.existsSync(path.join(releases, name, "node_modules", "jiti")))
-		.sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
-	if (!versions.length) {
-		throw new Error(
-			`Could not find a Pi installation with jiti under ${releases}. ` +
-				"Set PI_AGENT_DIR to point at your agent directory.",
-		);
+/** Resolve Pi without treating a test's isolated agent dir (PI_CODING_AGENT_DIR) as an install. */
+function resolveHost() {
+	const isolated = process.env.PI_CODING_AGENT_DIR;
+	delete process.env.PI_CODING_AGENT_DIR;
+	try {
+		return findHost();
+	} finally {
+		if (isolated !== undefined) process.env.PI_CODING_AGENT_DIR = isolated;
 	}
-	const version = versions[versions.length - 1];
-	const root = path.join(releases, version, "node_modules");
-	const agent = path.join(root, "@earendil-works", "pi-coding-agent", "dist");
+}
+
+/** The resolved installation plus the aliases this facade's tests use. */
+export function findPiInstall() {
+	const install = resolveHost();
 	return {
-		version,
-		root,
-		jiti: path.join(root, "jiti", "lib", "jiti.mjs"),
-		// Pi aliases these for extensions at load time; the harness does the same,
-		// so the extension and the tests share Pi's modules.
-		piCodingAgent: path.join(agent, "index.js"),
-		piTui: path.join(root, "@earendil-works", "pi-tui", "dist", "index.js"),
-		// Pi maps the pi-ai root to its compat entry for extensions.
-		piAi: path.join(root, "@earendil-works", "pi-ai", "dist", "compat.js"),
-		keybindings: path.join(agent, "core", "keybindings.js"),
+		...install,
+		version: install.versions.at(-1),
+		piAi: path.join(install.root, "@earendil-works", "pi-ai", "dist", "compat.js"),
+		keybindings: path.join(path.dirname(install.piCodingAgent), "core", "keybindings.js"),
 	};
 }
 
