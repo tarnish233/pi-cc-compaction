@@ -15,8 +15,8 @@
  *   only warms caches of up to about half an hour (its own safety windows),
  *   which idle compaction never touches, so the two never collide.
  *
- * Both features follow the shared pi-cc settings (/pi_cc compact, /pi_cc
- * idle); a change applies at once, without /reload. The extension never
+ * Both features follow /compaction_settings (compact, idle); a change
+ * applies at once, without /reload. The extension never
  * changes the system prompt, the tools or the messages of an ordinary
  * request: only the compaction it was asked for.
  */
@@ -28,7 +28,7 @@ import { invalidateConfig, loadConfig } from "./config.ts";
 import { IdleCompactor, requestTtlMs } from "./idle.ts";
 import { ccReserveTokens, commitPending, forgetSession, installPatches, runtime, syncLiveSessions, type ModelLike } from "./patches.ts";
 import { forkPlan } from "./plan.ts";
-import { CONFIG_CHANNEL, registerPiCcCommand } from "./settings.ts";
+import { CONFIG_CHANNEL, registerSettingsCommand } from "./settings.ts";
 
 function notify(ctx: ExtensionContext | undefined, message: string, level: "info" | "warning"): void {
 	try {
@@ -39,7 +39,7 @@ function notify(ctx: ExtensionContext | undefined, message: string, level: "info
 }
 
 export default function piCcCompact(pi: ExtensionAPI): void {
-	registerPiCcCommand(pi, "pi-cc-compaction");
+	registerSettingsCommand(pi);
 
 	const { missing } = installPatches({ SettingsManager, ExtensionRunner });
 	const rt = runtime();

@@ -46,7 +46,7 @@ export const IDLE_FRACTION = 0.75;
 /** A timer this late finds the cache likely gone (Claude Code's "lapsed"). */
 export const IDLE_LATE_MS = 60_000;
 
-export const IDLE_NOTICE = "Compacted while idle, before the prompt cache expired \u00b7 turn off with /pi_cc idle off";
+export const IDLE_NOTICE = "Compacted while idle, before the prompt cache expired \u00b7 turn off with /compaction_settings idle off";
 
 type Env = Record<string, string | undefined>;
 

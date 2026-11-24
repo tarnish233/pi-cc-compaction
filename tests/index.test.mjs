@@ -37,7 +37,7 @@ function ctx(notices = []) {
 const host = fakePi();
 mod.default(host.pi);
 
-test("it listens where compaction and idle time are decided, and owns /pi_cc", () => {
+test("it listens where compaction and idle time are decided, and owns /compaction_settings", () => {
 	assert.deepEqual([...host.handlers.keys()].sort(), [
 		"agent_settled",
 		"agent_start",
@@ -50,7 +50,7 @@ test("it listens where compaction and idle time are decided, and owns /pi_cc", (
 		"session_tree",
 		"turn_end",
 	]);
-	assert.ok(host.commands.has("pi_cc"));
+	assert.ok(host.commands.has("compaction_settings"));
 	assert.deepEqual(host.calls, [], "no sendMessage, tools or system prompt");
 });
 

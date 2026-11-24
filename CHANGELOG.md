@@ -2,6 +2,16 @@
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-11-24
+
+### Changed
+- Replace the shared /pi_cc command with /compaction_settings, containing only CC compaction and Idle compaction; Pi's built-in /compact remains unchanged.
+- Save preferences in pi-cc-compaction.json. When absent, inherit this package's valid keys from pi-cc.json and copy them on the first save without modifying the legacy file; retain environment overrides.
+- Remove shared settings-command ownership and settings-copy requirements; update the idle-compaction notice to the new command. Compaction thresholds and summary behavior are unchanged.
+
+### Fixed
+- Fit settings-panel rows to narrow terminal widths without mutating cached render arrays, and preserve effective values after failed saves.
+
 ## [0.2.17] - 2026-11-23
 
 ### Fixed

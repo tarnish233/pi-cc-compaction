@@ -14,7 +14,7 @@ pi install npm:pi-cc-compaction
 ln -sfn "$PWD" ~/.pi/agent/extensions/pi-cc-compaction
 ```
 
-装上即接管压缩：`/compact`、自动压缩和超限恢复，只要能读到提示缓存就走本包；读不到缓存的情况（见下文）交给 Pi 自己的压缩；空闲时在缓存过期前先压缩。不动 Pi 的缓存保温。不想用时 `/pi_cc compact off` 完全回到 Pi。
+装上即接管压缩：`/compact`、自动压缩和超限恢复，只要能读到提示缓存就走本包；读不到缓存的情况（见下文）交给 Pi 自己的压缩；空闲时在缓存过期前先压缩。不动 Pi 的缓存保温。不想用时 `/compaction_settings compact off` 完全回到 Pi。
 
 ## 功能
 
@@ -60,7 +60,7 @@ Claude Code 则在原会话上分叉：system prompt、工具、消息、思考�
 | `Compacted by Pi's own compaction · <原因>` | 读不到缓存，交给了 Pi 自己的压缩，原因见下表 |
 | `Compacted while idle, before the prompt cache expired · …` | 本包的[空闲压缩](#空闲压缩) |
 
-`/pi_cc compact off` 时压缩都是 Pi 的，不加这一行。
+`/compaction_settings compact off` 时压缩都是 Pi 的，不加这一行。
 
 ### 读不到缓存时：交给 Pi
 
@@ -90,7 +90,7 @@ Claude Code 则在原会话上分叉：system prompt、工具、消息、思考�
 
 - **有效期 ≥1 小时才启用**，和 Claude Code 一致；5 分钟缓存不做，否则每次稍微离开都会压缩
 - 一轮结束后开始计时，在“上次请求 + 75% 有效期”时触发（1 小时缓存即闲置 45 分钟）；触发时再确认：仍然空闲、没有排队消息、没有更新的请求、上下文 ≥10 万 token（`PI_CC_IDLE_COMPACT_MIN_TOKENS` 可调高）、没有迟到超过 1 分钟
-- 默认开启（`/pi_cc` 可关）
+- 默认开启（`/compaction_settings` 可关）
 
 有效期看上一次请求本身要的缓存，按顺序：
 
@@ -118,14 +118,18 @@ Claude Code 则在原会话上分叉：system prompt、工具、消息、思考�
 
 两者不冲突，各管各的时间段，本包不改 `cacheWarming`：Pi 的保温只在缓存较短时起作用（它自身的安全窗口：空闲最多 30 分钟、运行中最多 60 分钟，超过约半小时的缓存实际上不保温），空闲压缩只管 1 小时以上的缓存。5 分钟档的模型（如未设 `PI_CACHE_RETENTION=long` 的 Anthropic）只有保温能救，两样都留着。
 
-## /pi_cc
+## /compaction_settings
 
-本包和 pi-cc-loop、pi-cc-monitor、pi-cc-plugins 共同提供 `/pi_cc`：pi-cc 家族的设置命令，装了几个包都只有一个。
+本包独立提供 `/compaction_settings`，只管理压缩功能，不占用 Pi 内置的 `/compact`：
 
-- 本包的两项在面板的 Compact 页（Tab / Shift+Tab 切换页）：**CC compaction**（`compaction`，默认开）和 **Idle compaction**（`idleCompaction`，默认开）；`/pi_cc compact on|off`、`/pi_cc idle on|off` 切换
-- 切换即时生效，不用 `/reload`：阈值从下一次检查起变化，压缩从下一次起换回 Pi 的或本包的
-- 空闲压缩依赖 CC compaction：后者关掉时前者也不生效
-- 环境变量 `PI_CC_COMPACTION=0`、`PI_CC_IDLE_COMPACTION=0` 可临时覆盖，面板里相应项锁定
+- **CC compaction**（`compaction`，默认开）：`/compaction_settings compact on|off`
+- **Idle compaction**（`idleCompaction`，默认开）：`/compaction_settings idle on|off`
+
+TUI 中打开单页面板，上下键选择、Enter/空格切换、Esc 关闭；RPC 中不带参数输出摘要。切换即时生效，不用 `/reload`；关闭 CC compaction 后，空闲压缩也不生效。`PI_CC_COMPACTION`、`PI_CC_IDLE_COMPACTION` 可临时覆盖，相应面板选项锁定，变量值不写入文件。
+
+默认配置是 `~/.pi/agent/pi-cc-compaction.json`，跟随 `PI_CODING_AGENT_DIR`。新文件缺失时继承旧 `pi-cc.json` 中本包的有效字段，首次保存带入新文件；已有新文件不会被旧值覆盖，旧文件不修改、不删除。`PI_CC_CONFIG_FILE` 显式指定路径时不回读旧文件。
+
+本包不再注册共享的 `/pi_cc`；旧脚本改用 `/compaction_settings`。设置定义只在本仓库维护，不再同步其他插件的选项。
 
 ## 兼容性
 

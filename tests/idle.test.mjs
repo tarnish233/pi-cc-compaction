@@ -95,7 +95,7 @@ test("armed after a settled run: due 45 minutes after the last request on an hou
 	assert.equal(h.compactor.compacting, true, "session_compact cancels the timer, not the compaction in flight");
 	h.compacts[0].onComplete({});
 	assert.equal(h.compactor.compacting, false);
-	assert.deepEqual(h.notices.at(-1), { message: "Compacted while idle, before the prompt cache expired \u00b7 turn off with /pi_cc idle off", level: "info" });
+	assert.deepEqual(h.notices.at(-1), { message: "Compacted while idle, before the prompt cache expired \u00b7 turn off with /compaction_settings idle off", level: "info" });
 });
 
 test("not armed: settings off, short or unknown cache, small context, busy session, nothing captured", async () => {
